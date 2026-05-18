@@ -10,8 +10,6 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 from langchain.tools import tool
-from coze_coding_utils.log.write_log import request_context
-from coze_coding_utils.runtime_ctx.context import new_context
 
 
 @dataclass(frozen=True)
@@ -107,10 +105,7 @@ def analyze_worksheet(file_path: str) -> str:
     Returns:
         JSON 字符串，包含工作表的布局、内容和摘要信息
     """
-    ctx = request_context.get() or new_context(method="analyze_worksheet")
-
-    # 处理相对路径
-    workspace_path = os.getenv("COZE_WORKSPACE_PATH", "/workspace/projects")
+    workspace_path = os.getenv("COZE_WORKSPACE_PATH", os.getcwd())
     if not os.path.isabs(file_path):
         full_path = os.path.join(workspace_path, file_path)
     else:

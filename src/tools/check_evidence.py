@@ -6,12 +6,28 @@ import re
 from typing import List, Dict, Any
 from dataclasses import dataclass
 
-from langchain.tools import tool
-from coze_coding_utils.log.write_log import request_context
-from coze_coding_utils.runtime_ctx.context import new_context
+import os
+from typing import Optional
 
-from coze_coding_dev_sdk import LLMClient
+from langchain.tools import tool
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+
+_EVIDENCE_LLM: Optional[ChatOpenAI] = None
+
+
+def _get_evidence_llm() -> ChatOpenAI:
+    global _EVIDENCE_LLM
+    if _EVIDENCE_LLM is None:
+        api_key = os.getenv("COZE_WORKLOAD_IDENTITY_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("COZE_INTEGRATION_MODEL_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        _EVIDENCE_LLM = ChatOpenAI(
+            model="doubao-seed-1-6-251015",
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0.3,
+        )
+    return _EVIDENCE_LLM
 
 
 @dataclass(frozen=True)
@@ -99,8 +115,6 @@ def check_evidence(standard_program: str, execution_text: str) -> str:
     Returns:
         JSON 字符串，包含证据检查结果（是否充分、证据类型、问题、建议）
     """
-    ctx = request_context.get() or new_context(method="check_evidence")
-
     # 基础规则检查
     evidence_types = _extract_evidence_type(execution_text)
     required_types = _requires_evidence_by_standard(standard_program)
@@ -122,7 +136,7 @@ def check_evidence(standard_program: str, execution_text: str) -> str:
 
     # 使用 LLM 进行深度分析
     try:
-        client = LLMClient(ctx=ctx)
+        llm = _get_evidence_llm()
 
         system_prompt = """你是一名专业的审计底稿审阅专家，擅长评估审计证据的充分性和适当性。
 
@@ -151,13 +165,8 @@ def check_evidence(standard_program: str, execution_text: str) -> str:
 
 请评估上述执行内容中的证据是否充分，并按照要求返回 JSON 结果。"""
 
-        response = client.invoke(
-            messages=[
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt)
-            ],
-            model="doubao-seed-1-6-251015",
-            temperature=0.3
+        response = llm.invoke(
+            [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
         )
 
         # 解析 LLM 返回的 JSON

@@ -1,24 +1,36 @@
 node_modules
 dist
 .DS_Store
-*.swp
-.git/*
 __pycache__/
 *.pyc
 .venv
-*.o
-*.a
-/vendor
+.git
+.vscode
+.idea
 *.egg-info/
-/.env
-.env
 
+# env files (may contain secrets)
+.env
+.env.*
+!.env.example
+
+# frontend (separate build)
+frontend/
+
+# logs
+logs/
+
+# assets
+assets/uploads/
+
+# worktrees
 .worktrees/
 worktrees/
 
-assets/uploads/
+# docs
+docs/
 
-# 视频文件
+# large binary files
 *.mp4
 *.avi
 *.mov
@@ -33,15 +45,11 @@ assets/uploads/
 *.f4v
 *.rmvb
 *.vob
-
-# 归档文件
 *.iso
 *.dmg
 *.rar
 *.zip
 *.gz
-
-# 文档类也默认加入
 *.pdf
 *.docx
 *.doc
@@ -49,5 +57,8 @@ assets/uploads/
 *.xls
 *.ppt
 *.pptx
-*.xlsx
 *.csv
+
+# docker files (self)
+Dockerfile
+.dockerignore

@@ -8,8 +8,6 @@ from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
 
 from langchain.tools import tool
-from coze_coding_utils.log.write_log import request_context
-from coze_coding_utils.runtime_ctx.context import new_context
 
 
 # 附件文件名正则
@@ -114,9 +112,7 @@ def verify_attachments(
     Returns:
         JSON 字符串，包含附件验证结果（引用的附件、是否找到、匹配文件、建议）
     """
-    ctx = request_context.get() or new_context(method="verify_attachments")
-
-    workspace_path = os.getenv("COZE_WORKSPACE_PATH", "/workspace/projects")
+    workspace_path = os.getenv("COZE_WORKSPACE_PATH", os.getcwd())
 
     # 解析搜索路径
     if search_paths:
