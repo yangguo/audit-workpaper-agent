@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir uv \
 COPY src/ ./src/
 COPY config/ ./config/
 
+ENV PATH="/app/.venv/bin:$PATH"
+
 RUN mkdir -p /app/logs /app/assets/uploads
 
 EXPOSE 5000
