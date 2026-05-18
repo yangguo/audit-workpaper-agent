@@ -5,7 +5,7 @@ description = "Coze Vibe Coding project"
 requires-python = ">=3.12"
 dependencies = [
     "langchain==1.0.3",
-    "langchain-openai==1.0.1",
+    "langchain-openai==1.1.14",
     "langgraph==1.0.2",
     "langgraph-checkpoint==3.0.0",
     "fastapi>=0.121,<1",
@@ -14,7 +14,7 @@ dependencies = [
     "openpyxl>=3.1,<4",
     "python-pptx>=1.0,<2",
     "chardet>=5.2,<6",
-    "requests>=2.31,<3",
+    "requests>=2.33.0,<3",
     "python-multipart>=0.0.9,<1",
     "python-dotenv>=1.2.2",
 ]
