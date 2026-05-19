@@ -52,16 +52,27 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
   const uploadFiles = async (files: File[]) => {
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
-    const data = (await res.json()) as {
-      files?: Array<{ path?: string; saved_path?: string }>;
-      error?: string;
-      detail?: string;
-    };
-    if (!res.ok) throw new Error(data?.error || data?.detail || `Upload failed (${res.status})`);
-    return (data.files || [])
-      .map((f) => f.path || f.saved_path)
-      .filter((p): p is string => typeof p === "string" && p.length > 0);
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+    try {
+      const res = await fetch(`${backendUrl}/upload`, {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      const data = (await res.json()) as {
+        files?: Array<{ path?: string; saved_path?: string }>;
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok) throw new Error(data?.error || data?.detail || `Upload failed (${res.status})`);
+      return (data.files || [])
+        .map((f) => f.path || f.saved_path)
+        .filter((p): p is string => typeof p === "string" && p.length > 0);
+    } finally {
+      clearTimeout(timeoutId);
+    }
   };
 
   const addFileBlocks = (files: File[]) => {
