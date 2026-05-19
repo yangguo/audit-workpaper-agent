@@ -17,7 +17,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from api.upload import router as upload_router
-from langchain_core.messages import AIMessageChunk
 from langchain_core.runnables import RunnableConfig
 
 from utils.context import Context, request_context, new_context
@@ -102,12 +101,15 @@ class GraphService:
         run_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
 
         try:
-            async for chunk in graph.astream(payload, config=run_config, stream_mode="messages"):
-                msg, _metadata = chunk
-                if isinstance(msg, AIMessageChunk) and msg.content and isinstance(msg.content, str):
-                    yield self._sse_event({
-                        "choices": [{"delta": {"content": msg.content}}]
-                    })
+            result = await graph.ainvoke(payload, config=run_config)
+            messages = result.get("messages", [])
+            for msg in messages:
+                if msg.type == "ai" and hasattr(msg, "content") and msg.content:
+                    text = msg.content
+                    if isinstance(text, str) and text.strip():
+                        yield self._sse_event({
+                            "choices": [{"delta": {"content": text}}]
+                        })
         except Exception as e:
             logger.error(f"Stream error: {e}")
             yield self._sse_event({
