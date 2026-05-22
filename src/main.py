@@ -102,14 +102,18 @@ class GraphService:
 
         try:
             result = await graph.ainvoke(payload, config=run_config)
+            logger.info(f"Stream ainvoke completed, run_id: {run_id}")
             messages = result.get("messages", [])
+            logger.info(f"Stream got {len(messages)} messages")
             for msg in messages:
                 if msg.type == "ai" and hasattr(msg, "content") and msg.content:
                     text = msg.content
                     if isinstance(text, str) and text.strip():
+                        logger.info(f"Stream yielding AI message, length: {len(text)}")
                         yield self._sse_event({
                             "choices": [{"delta": {"content": text}}]
                         })
+            logger.info(f"Stream finished yielding, run_id: {run_id}")
         except Exception as e:
             logger.error(f"Stream error: {e}")
             yield self._sse_event({
@@ -278,6 +282,7 @@ async def openai_chat_completions(request: Request):
         async def sse_generator():
             async for event in service.stream_sse(agent_payload, ctx):
                 yield event
+            logger.info(f"SSE generator complete, sending [DONE], session: {ctx.run_id}")
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(sse_generator(), media_type="text/event-stream")
