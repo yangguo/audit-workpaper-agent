@@ -90,11 +90,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const placeholderAi: Message = { id: aiId, type: "ai", content: "" };
       setMessages((prev) => [...prev, placeholderAi]);
 
-      const res = await fetch(`${backendUrl}/v1/chat/completions`, {
+      // Start agent task
+      const startRes = await fetch(`${backendUrl}/v1/chat/completions`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           messages: [{ role: "user", content: text }],
           session_id: sid,
@@ -103,21 +102,67 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         signal: abort.signal,
       });
 
-      if (!res.ok) {
-        const data = await res.text();
+      if (!startRes.ok) {
+        const data = await startRes.text();
         setError(data || "Backend request failed");
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
         return;
       }
 
-      const data = await res.json();
-      const aiText = data?.choices?.[0]?.message?.content || "";
+      const { task_id } = await startRes.json();
+      if (!task_id) {
+        setError("No task ID returned");
+        setMessages((prev) => prev.filter((m) => m.id !== aiId));
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.map((m) => (m.id === aiId ? { ...m, content: "正在分析底稿..." } : m)),
+      );
+
+      // Poll for result
+      const pollInterval = 2000;
+      const maxPolls = 90; // 3 minutes max
+      let pollCount = 0;
+      let aiText = "";
+
+      while (pollCount < maxPolls && !abort.signal.aborted) {
+        await new Promise((r) => setTimeout(r, pollInterval));
+        pollCount += 1;
+
+        const pollRes = await fetch(
+          `${backendUrl}/v1/chat/completions/result/${task_id}`,
+          { signal: abort.signal },
+        );
+
+        if (!pollRes.ok) continue;
+
+        const pollData = await pollRes.json();
+
+        if (pollData.status === "completed") {
+          aiText = pollData?.choices?.[0]?.message?.content || "";
+          break;
+        }
+        if (pollData.status === "error") {
+          setError(pollData.error || "Agent error");
+          setMessages((prev) => prev.filter((m) => m.id !== aiId));
+          return;
+        }
+        // Update placeholder with progress indicator
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === aiId ? { ...m, content: `正在分析底稿... (${pollCount * 2}s)` } : m,
+          ),
+        );
+      }
+
       if (aiText.trim()) {
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, content: aiText } : m)),
         );
       } else {
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
+        if (!abort.signal.aborted) setError("Agent request timed out");
       }
     } catch (e) {
       if ((e as any)?.name !== "AbortError") setError(e);

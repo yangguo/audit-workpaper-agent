@@ -62,6 +62,7 @@ def _is_dev_env() -> bool:
 class GraphService:
     def __init__(self):
         self.running_tasks: Dict[str, asyncio.Task] = {}
+        self.task_results: Dict[str, Dict[str, Any]] = {}
         self._graph = None
 
     def _get_graph(self):
@@ -247,6 +248,21 @@ async def http_cancel(run_id: str, request: Request):
     return service.cancel_run(run_id)
 
 
+@app.get("/v1/chat/completions/result/{task_id}")
+async def get_chat_result(task_id: str):
+    result = service.task_results.get(task_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if result["status"] == "processing":
+        return result
+    if result["status"] == "error":
+        return {"status": "error", "error": result.get("error", "Unknown error")}
+    return {
+        "status": "completed",
+        "choices": [{"message": {"role": "assistant", "content": result["content"]}}],
+    }
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "message": "Service is running"}
@@ -292,19 +308,34 @@ async def openai_chat_completions(request: Request):
 
         return StreamingResponse(sse_generator(), media_type="text/event-stream")
     else:
-        ctx.run_id = session_id
-        result = await service.run(agent_payload, ctx)
-        ai_text = ""
-        msgs = result.get("messages", [])
-        logger.info(f"Non-stream result, run_id: {run_id}, status: {result.get('status', 'ok')}, messages: {len(msgs)}")
-        for m in reversed(msgs):
-            if hasattr(m, "content") and getattr(m, "type", "") == "ai":
-                ai_text = m.content
-                break
-        logger.info(f"Non-stream returning, ai_text length: {len(ai_text)}")
-        return {
-            "choices": [{"message": {"role": "assistant", "content": ai_text or str(result)}}]
-        }
+        task_id = uuid.uuid4().hex
+        ctx.run_id = task_id
+        service.task_results[task_id] = {"status": "processing"}
+
+        async def run_agent_background():
+            try:
+                result = await service.run(agent_payload, ctx)
+                ai_text = ""
+                msgs = result.get("messages", [])
+                for m in reversed(msgs):
+                    if hasattr(m, "content") and getattr(m, "type", "") == "ai":
+                        ai_text = m.content
+                        break
+                service.task_results[task_id] = {
+                    "status": "completed",
+                    "content": ai_text or str(result),
+                }
+                logger.info(f"Task {task_id} completed, ai_text length: {len(ai_text)}")
+            except Exception as e:
+                service.task_results[task_id] = {
+                    "status": "error",
+                    "error": str(e),
+                }
+                logger.error(f"Task {task_id} error: {e}")
+
+        asyncio.create_task(run_agent_background())
+        logger.info(f"Task {task_id} started in background")
+        return {"task_id": task_id, "status": "processing"}
 
 
 def parse_args():
