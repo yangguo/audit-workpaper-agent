@@ -84,11 +84,16 @@ class GraphService:
             graph = self._get_graph()
             run_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
 
-            return await graph.ainvoke(payload, config=run_config)
+            result = await graph.ainvoke(payload, config=run_config)
+            logger.info(f"Run ainvoke completed, run_id: {run_id}, messages: {len(result.get('messages', []))}")
+            return result
 
         except asyncio.CancelledError:
             logger.info(f"Run {run_id} was cancelled")
             return {"status": "cancelled", "run_id": run_id, "message": "Execution was cancelled"}
+        except Exception as e:
+            logger.error(f"Run {run_id} error: {e}\n{traceback.format_exc()}")
+            return {"status": "error", "run_id": run_id, "message": str(e)}
         finally:
             self.running_tasks.pop(run_id, None)
 
@@ -289,13 +294,14 @@ async def openai_chat_completions(request: Request):
     else:
         ctx.run_id = session_id
         result = await service.run(agent_payload, ctx)
-        # Extract the last AI message text from agent result
         ai_text = ""
         msgs = result.get("messages", [])
+        logger.info(f"Non-stream result, run_id: {run_id}, status: {result.get('status', 'ok')}, messages: {len(msgs)}")
         for m in reversed(msgs):
             if hasattr(m, "content") and getattr(m, "type", "") == "ai":
                 ai_text = m.content
                 break
+        logger.info(f"Non-stream returning, ai_text length: {len(ai_text)}")
         return {
             "choices": [{"message": {"role": "assistant", "content": ai_text or str(result)}}]
         }
