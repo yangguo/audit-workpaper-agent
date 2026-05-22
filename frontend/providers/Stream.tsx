@@ -98,59 +98,25 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         body: JSON.stringify({
           messages: [{ role: "user", content: text }],
           session_id: sid,
-          stream: true,
+          stream: false,
         }),
         signal: abort.signal,
       });
 
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
         const data = await res.text();
         setError(data || "Backend request failed");
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let lastText = "";
-
-      while (!abort.signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        while (true) {
-          const idx = buffer.indexOf("\n\n");
-          if (idx === -1) break;
-          const rawEvent = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-
-          const dataLines = rawEvent
-            .split("\n")
-            .filter((l) => l.startsWith("data:"))
-            .map((l) => l.slice(5).trim());
-          if (dataLines.length === 0) continue;
-
-          const dataText = dataLines.join("\n");
-          if (dataText === "[DONE]") continue;
-
-          try {
-            const chunk = JSON.parse(dataText);
-            const delta = chunk?.choices?.[0]?.delta?.content;
-            if (typeof delta === "string") {
-              lastText = lastText + delta;
-              setMessages((prev) =>
-                prev.map((m) => (m.id === aiId ? { ...m, content: lastText } : m)),
-              );
-            }
-          } catch {
-            // skip unparseable chunks
-          }
-        }
-      }
-
-      if (!lastText.trim()) {
+      const data = await res.json();
+      const aiText = data?.choices?.[0]?.message?.content || "";
+      if (aiText.trim()) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === aiId ? { ...m, content: aiText } : m)),
+        );
+      } else {
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
       }
     } catch (e) {
