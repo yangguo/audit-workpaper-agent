@@ -28,6 +28,7 @@ interface ContentBlock {
   text: string;
   metadata: { name: string };
   file?: File;
+  uploadStatus?: "ready" | "uploading" | "failed";
 }
 
 interface UseFileUploadOptions {

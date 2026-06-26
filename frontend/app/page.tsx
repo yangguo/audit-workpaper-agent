@@ -7,7 +7,7 @@ import React from "react";
 
 export default function HomePage(): React.ReactNode {
   return (
-    <React.Suspense fallback={<div className="flex h-screen items-center justify-center text-muted-foreground">Loading...</div>}>
+    <React.Suspense fallback={<div className="flex h-screen items-center justify-center text-muted-foreground">Loading…</div>}>
       <Toaster />
       <StreamProvider>
         <Thread />

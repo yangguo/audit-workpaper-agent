@@ -11,10 +11,14 @@ type Message = {
   tool_calls?: Array<{ name: string; id: string; args: Record<string, unknown> }>;
 };
 
+type TaskStatus = "idle" | "running" | "completed" | "failed" | "timeout";
+
 type StreamContextType = {
   messages: Message[];
   isLoading: boolean;
   error: unknown;
+  taskStatus: TaskStatus;
+  elapsedSeconds: number;
   submit: (input?: unknown) => void;
   stop: () => void;
 };
@@ -59,12 +63,15 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [taskStatus, setTaskStatus] = useState<TaskStatus>("idle");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
   const stop = () => {
     abortRef.current?.abort();
     abortRef.current = null;
     setIsLoading(false);
+    setTaskStatus((prev) => (prev === "running" ? "idle" : prev));
   };
 
   const submit: StreamContextType["submit"] = async (input) => {
@@ -79,6 +86,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
     setError(null);
     setIsLoading(true);
+    setTaskStatus("running");
+    setElapsedSeconds(0);
     setMessages(nextMessages);
 
     try {
@@ -105,6 +114,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       if (!startRes.ok) {
         const data = await startRes.text();
         setError(data || "Backend request failed");
+        setTaskStatus("failed");
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
         return;
       }
@@ -112,12 +122,13 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const { task_id } = await startRes.json();
       if (!task_id) {
         setError("No task ID returned");
+        setTaskStatus("failed");
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
         return;
       }
 
       setMessages((prev) =>
-        prev.map((m) => (m.id === aiId ? { ...m, content: "正在分析底稿..." } : m)),
+        prev.map((m) => (m.id === aiId ? { ...m, content: "正在分析底稿…" } : m)),
       );
 
       // Poll for result
@@ -129,6 +140,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       while (pollCount < maxPolls && !abort.signal.aborted) {
         await new Promise((r) => setTimeout(r, pollInterval));
         pollCount += 1;
+        setElapsedSeconds(pollCount * 2);
 
         const pollRes = await fetch(
           `${backendUrl}/v1/chat/completions/result/${task_id}`,
@@ -145,27 +157,35 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
         if (pollData.status === "error") {
           setError(pollData.error || "Agent error");
+          setTaskStatus("failed");
           setMessages((prev) => prev.filter((m) => m.id !== aiId));
           return;
         }
         // Update placeholder with progress indicator
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === aiId ? { ...m, content: `正在分析底稿... (${pollCount * 2}s)` } : m,
+            m.id === aiId ? { ...m, content: `正在分析底稿… (${pollCount * 2}s)` } : m,
           ),
         );
       }
 
       if (aiText.trim()) {
+        setTaskStatus("completed");
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, content: aiText } : m)),
         );
       } else {
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
-        if (!abort.signal.aborted) setError("Agent request timed out");
+        if (!abort.signal.aborted) {
+          setError("Agent request timed out");
+          setTaskStatus("timeout");
+        }
       }
     } catch (e) {
-      if ((e as any)?.name !== "AbortError") setError(e);
+      if ((e as any)?.name !== "AbortError") {
+        setError(e);
+        setTaskStatus("failed");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -175,6 +195,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     messages,
     isLoading,
     error,
+    taskStatus,
+    elapsedSeconds,
     submit,
     stop,
   };
