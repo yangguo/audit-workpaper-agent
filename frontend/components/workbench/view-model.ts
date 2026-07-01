@@ -42,6 +42,23 @@ function splitSections(content: string): AnalysisSection[] {
   });
 }
 
+function extractAnomalyCount(content: string): string {
+  const patterns = [
+    /(\d+)\s*个异常点?/,
+    /(\d+)\s*处异常/,
+    /异常[:：]\s*(\d+)/,
+    /异常数(?:量)?[:：]\s*(\d+)/,
+    /发现\s*(\d+)\s*个?异常/,
+    /存在\s*(\d+)\s*个?异常/,
+    /共\s*(\d+)\s*个?异常/,
+  ];
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    if (match) return match[1];
+  }
+  return "0";
+}
+
 export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
   const latestAi = [...input.messages]
     .reverse()
@@ -49,7 +66,9 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
   const analysisSections = latestAi?.content
     ? splitSections(latestAi.content)
     : [];
-  const anomalyMatch = latestAi?.content.match(/(\d+)\s*个异常/);
+  const anomalyCount = latestAi?.content
+    ? extractAnomalyCount(latestAi.content)
+    : "0";
   const toolTraces: ToolTrace[] = (latestAi?.tool_calls ?? []).map((call) => ({
     id: call.id,
     name: call.name,
@@ -99,7 +118,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
         label: "风险等级",
         value: latestAi?.content.includes("高风险") ? "高" : "中",
       },
-      { label: "异常项", value: anomalyMatch?.[1] ?? "0" },
+      { label: "异常项", value: anomalyCount },
       { label: "处理耗时", value: `${input.elapsedSeconds}s` },
     ],
     analysisSections,

@@ -93,8 +93,19 @@ export function Thread() {
     if (filesToUpload.length > 0) {
       try {
         uploadedPaths = await uploadFiles(filesToUpload);
-      } catch {
-        toast.error("文件上传失败，请重试");
+      } catch (error) {
+        console.error("File upload failed:", error);
+        const message = error instanceof Error ? error.message : String(error);
+        const isConnectionError =
+          message.includes("Failed to fetch") || message.includes("NetworkError");
+        toast.error(
+          isConnectionError ? "无法连接后端服务" : "文件上传失败，请重试",
+          {
+            description: isConnectionError
+              ? "请确认后端已启动：python src/main.py -m http -p 5000"
+              : message,
+          },
+        );
         return;
       }
     }

@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -6,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, File, UploadFile, HTTPException
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_FILES = 10
@@ -28,6 +30,7 @@ def _safe_filename(name: str) -> str:
 
 @router.post("/upload")
 async def upload_files(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    logger.info(f"Upload request received: {len(files)} file(s)")
     if len(files) > MAX_FILES:
         raise HTTPException(status_code=400, detail=f"Too many files (max {MAX_FILES})")
 
@@ -62,11 +65,12 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict[str, Any]:
             finally:
                 raise
         except Exception as e:
+            logger.error(f"Upload failed for {original_name}: {e}", exc_info=True)
             try:
                 if target_path.exists():
                     target_path.unlink()
             finally:
-                raise HTTPException(status_code=500, detail=f"Upload failed: {type(e).__name__}") from e
+                raise HTTPException(status_code=500, detail=f"Upload failed: {type(e).__name__}: {e}") from e
         finally:
             await f.close()
 

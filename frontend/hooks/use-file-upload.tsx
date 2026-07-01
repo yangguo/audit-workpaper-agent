@@ -62,11 +62,17 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
         body: fd,
         signal: controller.signal,
       });
-      const data = (await res.json()) as {
+      const rawText = await res.text();
+      let data: {
         files?: Array<{ path?: string; saved_path?: string }>;
         error?: string;
         detail?: string;
-      };
+      } = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(rawText || `Upload failed (${res.status})`);
+      }
       if (!res.ok) throw new Error(data?.error || data?.detail || `Upload failed (${res.status})`);
       return (data.files || [])
         .map((f) => f.path || f.saved_path)

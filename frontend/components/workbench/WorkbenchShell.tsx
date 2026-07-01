@@ -39,7 +39,7 @@ export function WorkbenchShell(props: {
         statusLabel={props.header.statusLabel}
         action={props.header.action}
       />
-      <div className="mx-auto grid w-full max-w-[1320px] flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[320px_minmax(0,1fr)_320px]">
+      <div className="mx-auto grid w-full max-w-[1320px] min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[320px_minmax(0,1fr)_320px]">
         <aside className="space-y-4">
           {props.intake ?? (
             <section className="rounded-2xl border bg-white p-4">
