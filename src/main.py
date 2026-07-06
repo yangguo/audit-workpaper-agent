@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from api.upload import router as upload_router
 from langchain_core.runnables import RunnableConfig
 
+from review.runner import get_status as get_review_status
 from storage.findings_store import load_findings
 from utils.context import Context, request_context, new_context
 
@@ -288,6 +289,24 @@ async def get_findings(review_id: str):
     if payload is None:
         raise HTTPException(status_code=404, detail="findings not found")
     return payload
+
+
+@app.get("/review/{review_id}/status")
+async def review_status(review_id: str):
+    """Lightweight status for a background review (polled by the frontend)."""
+    st = get_review_status(review_id)
+    if st is not None:
+        return st
+    # registry cleared (e.g. restart) but findings file may exist from a prior run
+    payload = load_findings(review_id)
+    if payload is not None:
+        return {
+            "review_id": review_id,
+            "status": "completed",
+            "source": payload.get("source"),
+            "stats": payload.get("stats"),
+        }
+    raise HTTPException(status_code=404, detail="review not found")
 
 
 @app.get("/health")
