@@ -4,6 +4,7 @@
 产出结构化 findings 写入侧端存储，返回摘要给 agent；前端通过 GET /findings/{review_id} 读取结构化结果。
 """
 import json
+import logging
 import os
 import uuid
 
@@ -15,6 +16,8 @@ from review.checkpoints import load_checkpoints_xlsx
 from review.llm import get_review_llm
 from review.pipeline import run_review
 from storage.findings_store import save_findings
+
+_logger = logging.getLogger("review_workpaper")
 
 
 def _resolve_path(workspace_path: str, file_path: str) -> str:
@@ -46,6 +49,12 @@ async def review_workpaper(
     """
     workspace_path = os.getenv("COZE_WORKSPACE_PATH", os.getcwd())
     full_path = _resolve_path(workspace_path, file_path)
+    _logger.info(
+        "review_workpaper called: file_path=%r checkpoints_path=%r "
+        "attachments_preview_path=%r sheets=%r workspace=%r resolved=%r exists=%r",
+        file_path, checkpoints_path, attachments_preview_path, sheets,
+        workspace_path, full_path, bool(full_path and os.path.exists(full_path)),
+    )
 
     if not full_path or not os.path.exists(full_path):
         return json.dumps({
@@ -87,6 +96,7 @@ async def review_workpaper(
             "counts_by_severity": stats.get("by_severity", {}),
             "counts_by_status": stats.get("by_status", {}),
             "counts_by_risk_type": stats.get("by_risk_type", {}),
+            "warning": stats.get("warning", ""),
             "top_issues": [
                 {
                     "issue_type": f.get("issue_type", ""),

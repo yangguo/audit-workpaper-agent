@@ -1,0 +1,13 @@
+{
+  "review_id": "e010d932368e41aba5b1a7c0f3af9e5e",
+  "created_at": "2026-07-06T11:19:00.989113",
+  "source": "9b4ad64d07674bc591f44360b391c8ba_C22 IT一般控制测试2025v5.xlsx",
+  "stats": {
+    "total_findings": 0,
+    "by_severity": {},
+    "by_status": {},
+    "by_risk_type": {},
+    "llm_call_stats": {}
+  },
+  "findings": []
+}

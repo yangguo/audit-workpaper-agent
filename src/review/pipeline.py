@@ -4,6 +4,7 @@ Ported from analyze_excel.py's generate_report review core (no xlsx/txt renderin
 """
 import dataclasses
 import json
+import logging
 from typing import Dict, List, Optional, Tuple
 
 import openpyxl
@@ -11,6 +12,7 @@ import openpyxl
 from review.attachments import _check_attachment_references
 from review.checkpoints import _llm_check_sheet_by_checkpoints
 from review.evidence_steps import _llm_check_evidence_vs_steps
+from review.excel_utils import _detect_layout
 from review.findings_review import _llm_review_findings
 from review.hallucination import (
     _build_minimal_context,
@@ -24,6 +26,8 @@ from review.procedure_pairs import (
     _check_sheet_scope,
     _llm_check_procedure_pairs,
 )
+
+_logger = logging.getLogger("review.pipeline")
 
 _SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
 
@@ -78,13 +82,39 @@ async def run_review(
     """Run the full review pipeline. Returns (findings_dicts, stats)."""
     checkpoints = checkpoints or {}
     attachments_preview = attachments_preview or {}
-    target = _parse_sheet_filter(sheets) or list(wb.sheetnames)
+    filtered = _parse_sheet_filter(sheets)
+    target = filtered or list(wb.sheetnames)
+    warning = ""
+    if filtered is not None:
+        reviewable = [
+            s for s in target
+            if s in wb.sheetnames and (_detect_layout(wb[s])[0] is not None or checkpoints.get(s))
+        ]
+        if not reviewable:
+            _logger.warning(
+                "sheets=%r yielded no reviewable sheets (no layout/checkpoints); "
+                "falling back to all sheets", sheets,
+            )
+            target = list(wb.sheetnames)
+            warning = f"指定的 Sheet（{sheets}）无可审阅内容（无审计程序布局/检查要点），已回退到全部 Sheet。"
+    _logger.info(
+        "run_review start: sheets_arg=%r target=%r wb_sheets=%r "
+        "checkpoints_keys=%r preview_items=%r warning=%r",
+        sheets, target, list(wb.sheetnames),
+        list(checkpoints.keys()), len(attachments_preview.get("items", []) if attachments_preview else []),
+        warning,
+    )
 
     findings: List[Finding] = []
     for sheet in target:
         if sheet not in wb.sheetnames:
+            _logger.info("  sheet=%r skipped (not in workbook)", sheet)
             continue
         ws = wb[sheet]
+        _logger.info(
+            "  sheet=%r cp=%r preview=%r",
+            sheet, bool(checkpoints.get(sheet)), bool(attachments_preview),
+        )
         # 1) checkpoint-based review
         if checkpoints.get(sheet):
             findings += await _llm_check_sheet_by_checkpoints(
@@ -147,6 +177,7 @@ async def run_review(
         "by_status": _counts_by(out, "status"),
         "by_risk_type": _counts_by(out, "risk_type"),
         "llm_call_stats": {k: dict(v) for k, v in LLM_CALL_STATS.items()},
+        "warning": warning,
     }
     return out, stats
 

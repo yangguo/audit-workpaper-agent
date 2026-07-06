@@ -99,3 +99,27 @@ async def test_run_review_empty_workbook(monkeypatch):
     )
     assert findings == []
     assert stats["total_findings"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_review_falls_back_when_specified_sheet_not_reviewable(monkeypatch):
+    """If `sheets` selects a sheet with no layout/checkpoints, fall back to all sheets."""
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    import openpyxl as _ox
+    wb = _ox.Workbook()
+    cover = wb.active
+    cover.title = "Cover"
+    cover["A1"] = "封面内容，无审计程序布局"
+    ws = wb.create_sheet("SA-4c")
+    ws["A1"] = "标准审计程序"
+    ws["B1"] = "执行审计程序"
+    ws["A5"] = "审计期间获取系统用户清单并检查权限分配情况。"
+    ws["B5"] = "我们导出了系统用户清单并进行了权限核查与记录。"
+    llm = _FakeLLM('{"status":"pass","reason":"符合","evidence_refs":[]}')
+
+    findings, stats = await run_review(
+        wb=wb, checkpoints={}, attachments_preview={}, sheets="Cover", llm=llm,
+    )
+    # fell back to all sheets -> SA-4c was reviewed -> procedure_pair LLM call attempted
+    assert stats.get("warning"), "expected a fallback warning"
+    assert stats["llm_call_stats"].get("procedure_pair", {}).get("calls", 0) >= 1
