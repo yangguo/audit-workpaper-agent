@@ -20,6 +20,8 @@ type StreamContextType = {
   error: unknown;
   taskStatus: TaskStatus;
   elapsedSeconds: number;
+  reviewStatus: "idle" | "running" | "completed" | "error";
+  reviewElapsedSeconds: number;
   findings: FindingsPayload | null;
   submit: (input?: unknown) => void;
   stop: () => void;
@@ -40,6 +42,56 @@ function contentToText(content: unknown): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+type ReviewPollOpts = {
+  backendUrl: string;
+  reviewId: string;
+  signal: () => AbortSignal | undefined;
+  onTick: (elapsedSeconds: number) => void;
+  onCompleted: (payload: FindingsPayload) => void;
+  onError: (message: string) => void;
+};
+
+async function pollReviewStatus(opts: ReviewPollOpts): Promise<void> {
+  const intervalMs = 5000;
+  const maxPolls = 720; // 60 min ceiling
+  for (let i = 1; i <= maxPolls; i++) {
+    const sig = opts.signal();
+    if (sig?.aborted) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+    opts.onTick(i * (intervalMs / 1000));
+    try {
+      const res = await fetch(`${opts.backendUrl}/review/${opts.reviewId}/status`, {
+        signal: opts.signal(),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.status === "completed") {
+        const findingsRes = await fetch(`${opts.backendUrl}/findings/${opts.reviewId}`, {
+          signal: opts.signal(),
+        });
+        if (findingsRes.ok) {
+          const payload = (await findingsRes.json()) as FindingsPayload;
+          if (payload && payload.findings) opts.onCompleted(payload);
+        }
+        return;
+      }
+      if (data.status === "error") {
+        opts.onError(data.error || "审阅失败");
+        return;
+      }
+      if (data.status === "cancelled") {
+        opts.onError("审阅已取消");
+        return;
+      }
+      // status === "running" -> keep polling
+    } catch (e) {
+      if ((e as any)?.name === "AbortError") return;
+      // transient fetch error -> keep polling
+    }
+  }
+  opts.onError("审阅超时（超过 60 分钟）");
 }
 
 function buildUserMessageText(messages: Message[]): string {
@@ -68,12 +120,18 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [taskStatus, setTaskStatus] = useState<TaskStatus>("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [findings, setFindings] = useState<FindingsPayload | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<"idle" | "running" | "completed" | "error">("idle");
+  const [reviewElapsedSeconds, setReviewElapsedSeconds] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const reviewAbortRef = useRef<AbortController | null>(null);
 
   const stop = () => {
     abortRef.current?.abort();
     abortRef.current = null;
+    reviewAbortRef.current?.abort();
+    reviewAbortRef.current = null;
     setIsLoading(false);
+    setReviewStatus((prev) => (prev === "running" ? "idle" : prev));
     setTaskStatus((prev) => (prev === "running" ? "idle" : prev));
   };
 
@@ -92,6 +150,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setTaskStatus("running");
     setElapsedSeconds(0);
     setFindings(null);
+    setReviewStatus("idle");
+    setReviewElapsedSeconds(0);
+    reviewAbortRef.current?.abort();
+    reviewAbortRef.current = null;
     setMessages(nextMessages);
 
     try {
@@ -141,6 +203,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       let pollCount = 0;
       let aiText = "";
       let reviewId: string | undefined;
+      let reviewSummary: { review_id?: string; status?: string } | undefined;
 
       while (pollCount < maxPolls && !abort.signal.aborted) {
         await new Promise((r) => setTimeout(r, pollInterval));
@@ -159,6 +222,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         if (pollData.status === "completed") {
           aiText = pollData?.choices?.[0]?.message?.content || "";
           reviewId = pollData?.review_id;
+          reviewSummary = pollData?.review_summary;
           break;
         }
         if (pollData.status === "error") {
@@ -180,12 +244,32 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, content: aiText } : m)),
         );
-        // Fetch structured findings written by review_workpaper (if any)
-        if (reviewId) {
+        // If review_workpaper started a background review, poll its status
+        if (reviewId && reviewSummary?.status === "running") {
+          setReviewStatus("running");
+          await pollReviewStatus({
+            backendUrl,
+            reviewId,
+            signal: () => reviewAbortRef.current?.signal,
+            onTick: (secs) => setReviewElapsedSeconds(secs),
+            onCompleted: (payload) => {
+              setFindings(payload);
+              setReviewStatus("completed");
+            },
+            onError: (msg) => {
+              setError(msg);
+              setReviewStatus("error");
+            },
+          });
+        } else if (reviewId) {
+          // review already completed (or no background review) — fetch findings directly
           fetch(`${backendUrl}/findings/${reviewId}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((data: FindingsPayload | null) => {
-              if (data && data.findings) setFindings(data);
+              if (data && data.findings) {
+                setFindings(data);
+                setReviewStatus("completed");
+              }
             })
             .catch(() => {
               // structured findings are optional; Markdown narrative still shows
@@ -214,6 +298,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     error,
     taskStatus,
     elapsedSeconds,
+    reviewStatus,
+    reviewElapsedSeconds,
     findings,
     submit,
     stop,

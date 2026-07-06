@@ -154,6 +154,8 @@ export function Thread() {
     elapsedSeconds: stream.elapsedSeconds,
     error: stream.error,
     findings: stream.findings,
+    reviewStatus: stream.reviewStatus,
+    reviewElapsedSeconds: stream.reviewElapsedSeconds,
   });
 
   const statusLabel =

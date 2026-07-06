@@ -31,6 +31,8 @@ type Input = {
   elapsedSeconds: number;
   error: unknown;
   findings?: FindingsPayload | null;
+  reviewStatus?: "idle" | "running" | "completed" | "error";
+  reviewElapsedSeconds?: number;
 };
 
 function splitSections(content: string): AnalysisSection[] {
@@ -144,20 +146,22 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
     .reverse()
     .find((message) => message.type === "ai" && message.content);
 
+  const reviewRunning = input.reviewStatus === "running";
   const errorMessage =
     input.error instanceof Error
       ? "分析失败，请检查输入材料后重试。"
       : typeof input.error === "string"
         ? "分析失败，请检查输入材料后重试。"
         : undefined;
-
   const runningMessage = input.isLoading
     ? `正在分析底稿… 已运行 ${input.elapsedSeconds}s`
-    : undefined;
+    : reviewRunning
+      ? `审阅进行中… 已运行 ${input.reviewElapsedSeconds ?? 0}s（大底稿可能需要数十分钟，完成后自动展示结果）`
+      : undefined;
 
   const status: WorkbenchStatus = input.error
     ? "failed"
-    : input.isLoading
+    : input.isLoading || reviewRunning
       ? "running"
       : input.status;
 
@@ -165,11 +169,21 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
     { label: "准备材料", status: "completed" },
     {
       label: "分析底稿",
-      status: input.isLoading ? "active" : input.error ? "failed" : "completed",
+      status: input.isLoading
+        ? "active"
+        : input.error
+          ? "failed"
+          : "completed",
     },
     {
       label: "生成结论",
-      status: input.isLoading ? "pending" : input.error ? "failed" : "completed",
+      status: reviewRunning
+        ? "active"
+        : input.isLoading
+          ? "pending"
+          : input.error
+            ? "failed"
+            : "completed",
     },
   ];
 
