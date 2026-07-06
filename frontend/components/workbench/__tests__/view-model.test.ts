@@ -45,4 +45,61 @@ describe("buildWorkbenchViewModel", () => {
     expect(failed.progressSteps.some((step) => step.status === "failed")).toBe(true);
     expect(failed.errorMessage).toBe("分析失败，请检查输入材料后重试。");
   });
+
+  it("builds metrics and sections from structured findings when provided", () => {
+    const model = buildWorkbenchViewModel({
+      status: "completed",
+      archiveUrl: "",
+      contentBlocks: [],
+      messages: [{ id: "ai-1", type: "ai", content: "## 审阅报告\n..." }],
+      isLoading: false,
+      elapsedSeconds: 12,
+      error: null,
+      findings: {
+        review_id: "rid",
+        stats: {
+          total_findings: 2,
+          by_severity: { P0: 1, P1: 1, P2: 0 },
+          by_status: { fail: 2 },
+          by_risk_type: { 证据不足: 2 },
+          llm_call_stats: { "checkpoints:SA-1": { calls: 3, ok: 3 } },
+        },
+        findings: [
+          {
+            issue_type: "特权账号识别范围可能不完整",
+            severity: "P1",
+            severity_display: "中",
+            sheet: "SA-4c",
+            cell: null,
+            basis: "依据",
+            suggestion: "建议",
+            evidence_refs: [{ sheet: "SA-4c", cell_or_range: "A1" }],
+            conclusion: "结论",
+          },
+          {
+            issue_type: "执行列疑似未替换模板",
+            severity: "P0",
+            severity_display: "高",
+            sheet: "SA-1",
+            cell: "B5",
+            basis: "依据2",
+            suggestion: "建议2",
+            evidence_refs: [],
+            conclusion: "结论2",
+          },
+        ],
+      },
+    });
+
+    expect(model.summaryMetrics.find((m) => m.label === "P0")?.value).toBe("1");
+    expect(model.summaryMetrics.find((m) => m.label === "P1")?.value).toBe("1");
+    expect(model.summaryMetrics.find((m) => m.label === "总计")?.value).toBe("2");
+    const titles = model.analysisSections.map((s) => s.title);
+    expect(titles).toContain("P0 高风险问题（1）");
+    expect(titles).toContain("P1 中风险问题（1）");
+    // evidence_ref surfaced in the evidence list
+    expect(model.evidenceItems.some((e) => e.name.includes("SA-4c"))).toBe(true);
+    // llm_call_stats surfaced as tool traces
+    expect(model.toolTraces.some((t) => t.name.startsWith("checkpoints"))).toBe(true);
+  });
 });

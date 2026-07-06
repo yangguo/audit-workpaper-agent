@@ -3,6 +3,7 @@
 import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { v4 as uuidv4 } from "uuid";
+import type { FindingsPayload } from "@/components/workbench/types";
 
 type Message = {
   id: string;
@@ -19,6 +20,7 @@ type StreamContextType = {
   error: unknown;
   taskStatus: TaskStatus;
   elapsedSeconds: number;
+  findings: FindingsPayload | null;
   submit: (input?: unknown) => void;
   stop: () => void;
 };
@@ -65,6 +67,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [error, setError] = useState<unknown>(null);
   const [taskStatus, setTaskStatus] = useState<TaskStatus>("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [findings, setFindings] = useState<FindingsPayload | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const stop = () => {
@@ -88,6 +91,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setIsLoading(true);
     setTaskStatus("running");
     setElapsedSeconds(0);
+    setFindings(null);
     setMessages(nextMessages);
 
     try {
@@ -136,6 +140,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const maxPolls = 90; // 3 minutes max
       let pollCount = 0;
       let aiText = "";
+      let reviewId: string | undefined;
 
       while (pollCount < maxPolls && !abort.signal.aborted) {
         await new Promise((r) => setTimeout(r, pollInterval));
@@ -153,6 +158,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         if (pollData.status === "completed") {
           aiText = pollData?.choices?.[0]?.message?.content || "";
+          reviewId = pollData?.review_id;
           break;
         }
         if (pollData.status === "error") {
@@ -174,6 +180,17 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, content: aiText } : m)),
         );
+        // Fetch structured findings written by review_workpaper (if any)
+        if (reviewId) {
+          fetch(`${backendUrl}/findings/${reviewId}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: FindingsPayload | null) => {
+              if (data && data.findings) setFindings(data);
+            })
+            .catch(() => {
+              // structured findings are optional; Markdown narrative still shows
+            });
+        }
       } else {
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
         if (!abort.signal.aborted) {
@@ -197,6 +214,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     error,
     taskStatus,
     elapsedSeconds,
+    findings,
     submit,
     stop,
   };

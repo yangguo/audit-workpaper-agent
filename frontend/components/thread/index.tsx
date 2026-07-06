@@ -153,6 +153,7 @@ export function Thread() {
     isLoading,
     elapsedSeconds: stream.elapsedSeconds,
     error: stream.error,
+    findings: stream.findings,
   });
 
   const statusLabel =

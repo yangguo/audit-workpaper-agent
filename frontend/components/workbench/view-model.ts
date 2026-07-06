@@ -1,6 +1,9 @@
 import type {
   AnalysisSection,
   EvidenceItem,
+  Finding,
+  FindingsPayload,
+  ProgressStep,
   ToolTrace,
   WorkbenchStatus,
   WorkbenchViewModel,
@@ -27,6 +30,7 @@ type Input = {
   isLoading: boolean;
   elapsedSeconds: number;
   error: unknown;
+  findings?: FindingsPayload | null;
 };
 
 function splitSections(content: string): AnalysisSection[] {
@@ -59,21 +63,86 @@ function extractAnomalyCount(content: string): string {
   return "0";
 }
 
+function uploadedEvidence(input: Input): EvidenceItem[] {
+  const items = input.contentBlocks
+    .filter((block) => block.metadata?.name)
+    .map((block, index): EvidenceItem => ({
+      id: `${block.metadata?.name}-${index}`,
+      name: block.metadata?.name ?? "未命名文件",
+      source: "upload",
+      status: "ready",
+    }));
+  if (input.archiveUrl) {
+    items.push({
+      id: "archive-url",
+      name: input.archiveUrl,
+      source: "link",
+      status: "ready",
+    });
+  }
+  return items;
+}
+
+const SEVERITY_TITLES: Record<string, string> = {
+  P0: "P0 高风险问题",
+  P1: "P1 中风险问题",
+  P2: "P2 低风险问题",
+};
+
+function findingsToSections(findings: Finding[]): AnalysisSection[] {
+  const groups: Record<string, Finding[]> = {};
+  for (const f of findings) {
+    const sev = (f.severity || "P2") as string;
+    if (!groups[sev]) groups[sev] = [];
+    groups[sev].push(f);
+  }
+  const sections: AnalysisSection[] = [];
+  for (const sev of ["P0", "P1", "P2"]) {
+    const list = groups[sev];
+    if (!list || list.length === 0) continue;
+    const body = list
+      .map((f, i) => {
+        const loc = [f.sheet, f.cell].filter(Boolean).join("!");
+        const conclusion = f.llm_conclusion || f.conclusion || f.issue_type;
+        const refs = (f.evidence_refs || [])
+          .map((r) => r.attachment || r.cell_or_range || "")
+          .filter(Boolean)
+          .join(", ");
+        const lines = [`**${i + 1}. ${f.issue_type}**${loc ? ` (${loc})` : ""}`, conclusion || ""];
+        if (f.basis) lines.push(`依据: ${f.basis}`);
+        if (f.suggestion) lines.push(`建议: ${f.suggestion}`);
+        if (refs) lines.push(`证据: ${refs}`);
+        return lines.filter(Boolean).join("\n");
+      })
+      .join("\n\n");
+    sections.push({ title: `${SEVERITY_TITLES[sev] || sev}（${list.length}）`, body });
+  }
+  return sections;
+}
+
+function findingsToEvidence(findings: Finding[]): EvidenceItem[] {
+  const items: EvidenceItem[] = [];
+  for (const f of findings) {
+    for (const r of f.evidence_refs || []) {
+      const name = r.attachment || r.cell_or_range || "";
+      if (!name) continue;
+      const loc = f.sheet ? `${f.sheet}!${name}` : name;
+      items.push({
+        id: `f-${f.sheet || ""}-${name}`,
+        name: loc,
+        source: "link",
+        status: "ready",
+      });
+    }
+  }
+  return items;
+}
+
 export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
+  const uploaded = uploadedEvidence(input);
   const latestAi = [...input.messages]
     .reverse()
     .find((message) => message.type === "ai" && message.content);
-  const analysisSections = latestAi?.content
-    ? splitSections(latestAi.content)
-    : [];
-  const anomalyCount = latestAi?.content
-    ? extractAnomalyCount(latestAi.content)
-    : "0";
-  const toolTraces: ToolTrace[] = (latestAi?.tool_calls ?? []).map((call) => ({
-    id: call.id,
-    name: call.name,
-    argsSummary: JSON.stringify(call.args),
-  }));
 
   const errorMessage =
     input.error instanceof Error
@@ -92,50 +161,77 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
       ? "running"
       : input.status;
 
+  const progressSteps: ProgressStep[] = [
+    { label: "准备材料", status: "completed" },
+    {
+      label: "分析底稿",
+      status: input.isLoading ? "active" : input.error ? "failed" : "completed",
+    },
+    {
+      label: "生成结论",
+      status: input.isLoading ? "pending" : input.error ? "failed" : "completed",
+    },
+  ];
+
+  const lastUpdatedLabel =
+    input.elapsedSeconds > 0 ? `${input.elapsedSeconds}s 前更新` : "刚刚更新";
+
+  // Structured-findings path (preferred when review_workpaper ran)
+  if (input.findings && input.findings.findings) {
+    const bySev = input.findings.stats.by_severity || {};
+    const summaryMetrics = [
+      { label: "P0", value: String(bySev.P0 || 0) },
+      { label: "P1", value: String(bySev.P1 || 0) },
+      { label: "P2", value: String(bySev.P2 || 0) },
+      { label: "总计", value: String(input.findings.stats.total_findings) },
+      { label: "处理耗时", value: `${input.elapsedSeconds}s` },
+    ];
+    const analysisSections = findingsToSections(input.findings.findings);
+    const toolTraces: ToolTrace[] = Object.entries(
+      input.findings.stats.llm_call_stats || {},
+    ).map(([stage, counts], i) => ({
+      id: `stage-${i}`,
+      name: stage,
+      argsSummary: JSON.stringify(counts),
+    }));
+    return {
+      status,
+      evidenceItems: uploaded.concat(findingsToEvidence(input.findings.findings)),
+      summaryMetrics,
+      analysisSections,
+      progressSteps,
+      toolTraces,
+      lastUpdatedLabel,
+      errorMessage,
+      runningMessage,
+    };
+  }
+
+  // Markdown fallback (no structured findings)
+  const analysisSections = latestAi?.content ? splitSections(latestAi.content) : [];
+  const anomalyCount = latestAi?.content ? extractAnomalyCount(latestAi.content) : "0";
+  const toolTraces: ToolTrace[] = (latestAi?.tool_calls ?? []).map((call) => ({
+    id: call.id,
+    name: call.name,
+    argsSummary: JSON.stringify(call.args),
+  }));
+  const summaryMetrics = [
+    {
+      label: "风险等级",
+      value: latestAi?.content.includes("高风险") ? "高" : "中",
+    },
+    { label: "异常项", value: anomalyCount },
+    { label: "处理耗时", value: `${input.elapsedSeconds}s` },
+  ];
+
   return {
     status,
-    evidenceItems: (input.contentBlocks
-      .filter((block) => block.metadata?.name)
-      .map((block, index): EvidenceItem => ({
-        id: `${block.metadata?.name}-${index}`,
-        name: block.metadata?.name ?? "未命名文件",
-        source: "upload",
-        status: "ready",
-      })) as EvidenceItem[]).concat(
-      input.archiveUrl
-        ? [
-            {
-              id: "archive-url",
-              name: input.archiveUrl,
-              source: "link",
-              status: "ready",
-            },
-          ]
-        : [],
-    ),
-    summaryMetrics: [
-      {
-        label: "风险等级",
-        value: latestAi?.content.includes("高风险") ? "高" : "中",
-      },
-      { label: "异常项", value: anomalyCount },
-      { label: "处理耗时", value: `${input.elapsedSeconds}s` },
-    ],
+    evidenceItems: uploaded,
+    summaryMetrics,
     analysisSections,
-    progressSteps: [
-      { label: "准备材料", status: "completed" },
-      {
-        label: "分析底稿",
-        status: input.isLoading ? "active" : input.error ? "failed" : "completed",
-      },
-      {
-        label: "生成结论",
-        status: input.isLoading ? "pending" : input.error ? "failed" : "completed",
-      },
-    ],
+    progressSteps,
     toolTraces,
-    lastUpdatedLabel:
-      input.elapsedSeconds > 0 ? `${input.elapsedSeconds}s 前更新` : "刚刚更新",
+    lastUpdatedLabel,
     errorMessage,
     runningMessage,
   };

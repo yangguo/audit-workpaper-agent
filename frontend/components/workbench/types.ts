@@ -45,3 +45,43 @@ export type WorkbenchViewModel = {
   errorMessage?: string;
   runningMessage?: string;
 };
+
+export type EvidenceRef = {
+  sheet?: string;
+  cell_or_range?: string;
+  attachment?: string;
+  excerpt?: string;
+};
+
+export type Finding = {
+  issue_type: string;
+  severity?: string;
+  severity_display?: string;
+  sheet?: string;
+  cell?: string | null;
+  snippet?: string;
+  basis?: string;
+  suggestion?: string;
+  status?: string;
+  risk_type?: string;
+  evidence_refs?: EvidenceRef[];
+  conclusion?: string;
+  llm_status?: string;
+  llm_conclusion?: string;
+  cross_validate_issues?: string[];
+  challenge_verdict?: string | null;
+};
+
+export type FindingsPayload = {
+  review_id: string;
+  created_at?: string;
+  source?: string;
+  stats: {
+    total_findings: number;
+    by_severity: Record<string, number>;
+    by_status?: Record<string, number>;
+    by_risk_type?: Record<string, number>;
+    llm_call_stats?: Record<string, Record<string, number>>;
+  };
+  findings: Finding[];
+};
