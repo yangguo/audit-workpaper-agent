@@ -1,11 +1,31 @@
 import openpyxl
+import pytest
+from langchain_core.messages import AIMessage
 
 from review.procedure_pairs import (
     _requires_evidence_by_standard,
     _likely_interview_only,
     _check_procedure_pairs,
     _check_sheet_scope,
+    _llm_judge_procedure_pair,
+    _llm_check_procedure_pairs,
 )
+
+
+class _FakeRunnable:
+    def __init__(self, content):
+        self.content = content
+
+    async def ainvoke(self, messages):
+        return AIMessage(content=self.content)
+
+
+class _FakeLLM:
+    def __init__(self, content):
+        self.content = content
+
+    def bind(self, **kwargs):
+        return _FakeRunnable(self.content)
 
 
 def test_requires_evidence_by_standard():
@@ -80,3 +100,34 @@ def test_check_sheet_scope_supplier_without_agreement():
     findings = _check_sheet_scope("PM-5", ws)
     assert len(findings) == 1
     assert findings[0].issue_type == "供应商托管场景证据可能不足"
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_procedure_pair_parses_json(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    llm = _FakeLLM('{"status":"fail","reason":"理由文字","evidence_refs":[]}')
+    success, is_match, reason, raw = await _llm_judge_procedure_pair(
+        llm=llm, standard_text="获取系统用户清单并检查权限。",
+        execution_text="我们导出用户清单并核查权限。",
+    )
+    assert success is True
+    assert is_match is False
+    assert "理由文字" in reason
+
+
+@pytest.mark.asyncio
+async def test_llm_check_procedure_pairs_flags_mismatch(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "标准审计程序"
+    ws["B1"] = "执行审计程序"
+    ws["A5"] = "审计期间获取系统用户清单并检查权限分配情况。"
+    ws["B5"] = "我们导出了系统用户清单并进行了权限核查与记录。"
+    llm = _FakeLLM('{"status":"fail","reason":"执行未覆盖关键条件","evidence_refs":[]}')
+
+    report, findings = await _llm_check_procedure_pairs(
+        llm=llm, wb=wb, target_sheets=[ws.title], start_row=5, sleep_seconds=0,
+    )
+    assert report["total"] >= 1
+    assert any(f.issue_type.startswith("LLM判定：") for f in findings)
