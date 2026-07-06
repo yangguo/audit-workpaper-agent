@@ -1,11 +1,13 @@
+import asyncio
 import json
-import os
 
 import openpyxl
 import pytest
 from langchain_core.messages import AIMessage
 
+import review.runner as runner
 import tools.review_workpaper as rwp
+from review.runner import _REGISTRY
 from storage.findings_store import load_findings, save_findings
 
 
@@ -56,9 +58,10 @@ def test_findings_store_load_missing_returns_none(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_review_workpaper_tool_writes_findings(monkeypatch, tmp_path):
+async def test_review_workpaper_tool_starts_background_review(monkeypatch, tmp_path):
     monkeypatch.setenv("COZE_WORKSPACE_PATH", str(tmp_path))
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    _REGISTRY.clear()
     uploads = tmp_path / "assets" / "uploads"
     uploads.mkdir(parents=True)
     wb = openpyxl.Workbook()
@@ -68,22 +71,26 @@ async def test_review_workpaper_tool_writes_findings(monkeypatch, tmp_path):
     xlsx_path = uploads / "test.xlsx"
     wb.save(str(xlsx_path))
 
-    monkeypatch.setattr(rwp, "get_review_llm", lambda: _FakeLLM(_pass_review_payload()))
+    monkeypatch.setattr(runner, "get_review_llm", lambda: _FakeLLM(_pass_review_payload()))
 
     result_str = await rwp.review_workpaper.ainvoke({"file_path": "assets/uploads/test.xlsx"})
     result = json.loads(result_str)
 
+    # tool returns immediately with running status
     assert result["success"] is True
     assert result["review_id"]
-    assert result["total_findings"] == 1
+    assert result["status"] == "running"
+    assert result["status_url"] == f"/review/{result['review_id']}/status"
     assert result["findings_url"] == f"/findings/{result['review_id']}"
-    assert result["counts_by_severity"]["P1"] == 1
 
+    # background task eventually completes and writes findings
+    await _REGISTRY[result["review_id"]]["task"]
     saved = load_findings(result["review_id"])
     assert saved is not None
     assert saved["stats"]["total_findings"] == 1
     assert saved["findings"][0]["issue_type"] == "特权账号识别范围可能不完整"
     assert saved["findings"][0]["severity_display"] == "中"
+    assert runner.get_status(result["review_id"])["status"] == "completed"
 
 
 @pytest.mark.asyncio
