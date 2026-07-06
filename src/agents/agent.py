@@ -12,8 +12,7 @@ from langchain_core.messages import AnyMessage
 from storage.memory.memory_saver import get_memory_saver
 
 from tools.analyze_worksheet import analyze_worksheet
-from tools.check_evidence import check_evidence
-from tools.verify_attachments import verify_attachments
+from tools.review_workpaper import review_workpaper
 
 
 LLM_CONFIG = "config/agent_llm_config.json"
@@ -52,8 +51,7 @@ def build_agent():
 
     tools_list = [
         analyze_worksheet,
-        check_evidence,
-        verify_attachments,
+        review_workpaper,
     ]
 
     return create_agent(

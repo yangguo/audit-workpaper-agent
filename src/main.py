@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from api.upload import router as upload_router
 from langchain_core.runnables import RunnableConfig
 
+from storage.findings_store import load_findings
 from utils.context import Context, request_context, new_context
 
 _log_dir = os.path.join(os.getcwd(), "logs")
@@ -261,7 +262,32 @@ async def get_chat_result(task_id: str):
     return {
         "status": "completed",
         "choices": [{"message": {"role": "assistant", "content": result["content"]}}],
+        "review_id": result.get("review_id"),
+        "review_summary": result.get("review_summary"),
     }
+
+
+def _extract_review_summary(messages):
+    """Find the latest review_workpaper tool result and return its parsed summary dict."""
+    for m in reversed(messages):
+        if getattr(m, "type", "") == "tool" and getattr(m, "name", "") == "review_workpaper":
+            content = getattr(m, "content", "")
+            if isinstance(content, str):
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, dict) and data.get("review_id"):
+                        return data
+                except Exception:
+                    pass
+    return None
+
+
+@app.get("/findings/{review_id}")
+async def get_findings(review_id: str):
+    payload = load_findings(review_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="findings not found")
+    return payload
 
 
 @app.get("/health")
@@ -322,9 +348,12 @@ async def openai_chat_completions(request: Request):
                     if hasattr(m, "content") and getattr(m, "type", "") == "ai":
                         ai_text = m.content
                         break
+                review_summary = _extract_review_summary(msgs)
                 service.task_results[task_id] = {
                     "status": "completed",
                     "content": ai_text or str(result),
+                    "review_id": review_summary.get("review_id") if review_summary else None,
+                    "review_summary": review_summary,
                 }
                 logger.info(f"Task {task_id} completed, ai_text length: {len(ai_text)}")
             except Exception as e:

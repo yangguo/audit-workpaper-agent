@@ -607,11 +607,11 @@ def test_repair_migrates_chinese_status_and_severity():
     repaired = _repair_finding_result({
         "status": "有问题", "conclusion": "测试结论文本",
         "severity": "高", "risk_type": "证据不足",
+        "evidence_refs": [{"cell_or_range": "A1", "excerpt": "摘录"}],
     })
+    # with evidence_refs present, fail is not downgraded
     assert repaired["status"] == "fail"
     assert repaired["severity"] == "P0"
-    # fail without constructable evidence -> downgraded to unknown
-    assert repaired["status"] == "unknown" or repaired["evidence_refs"]
 
 
 def test_repair_downgrades_fail_without_evidence_to_unknown():

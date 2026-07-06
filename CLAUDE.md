@@ -47,16 +47,20 @@ npm run build
   - `POST /stream_run` — SSE streaming execution
   - `POST /cancel/{run_id}` — cancel a running task
   - `POST /node_run/{node_id}` — run a single graph node
-  - `POST /v1/chat/completions` — OpenAI-compatible chat API
+  - `POST /v1/chat/completions` — OpenAI-compatible chat API (non-stream returns `task_id`; poll `GET /v1/chat/completions/result/{task_id}`; completed result carries `review_id` when the agent ran `review_workpaper`)
   - `POST /upload` — file upload (max 10 files, 100MB each)
+  - `GET /findings/{review_id}` — structured review findings (written by `review_workpaper` to a side store)
   - `GET /health`, `GET /graph_parameter`
 
-- **`src/agents/agent.py`** — Agent definition. Loads LLM config from `config/agent_llm_config.json`, creates a `ChatOpenAI` instance (pointing to Doubao model via Ark API at `COZE_INTEGRATION_MODEL_BASE_URL`), and builds a LangChain agent with three tools and a checkpointer. Uses a sliding window of 40 messages. The agent type is determined by `coze_coding_utils.helper.graph_helper.is_agent_proj()`.
+- **`src/agents/agent.py`** — Agent definition. Loads LLM config from `config/agent_llm_config.json`, creates a `ChatOpenAI` instance (pointing to Doubao model via Ark API at `COZE_INTEGRATION_MODEL_BASE_URL`), and builds a LangChain agent with two tools and a checkpointer. Uses a sliding window of 40 messages.
 
-- **`src/tools/`** — Three LangChain tools registered on the agent:
-  - `analyze_worksheet(file_path)` — Opens an Excel workbook, auto-detects "标准审计程序" (standard) and "执行程序" (execution) columns by scanning header rows, extracts audit program rows
-  - `check_evidence(standard_program, execution_text)` — Rule-based keyword matching for evidence types, then calls an LLM (doubao-seed-1-6-251015 via `coze_coding_dev_sdk.LLMClient`) for deeper analysis
-  - `verify_attachments(execution_text, search_paths, filename_list)` — Regex extraction of attachment filenames/paths/indices from audit text, then checks if files exist on disk
+- **`src/tools/`** — Two LangChain tools registered on the agent:
+  - `analyze_worksheet(file_path)` — Opens an Excel workbook, auto-detects "标准审计程序" (standard) and "执行程序" (execution) columns by scanning header rows, extracts audit program rows. Used to preview structure before a full review.
+  - `review_workpaper(file_path, checkpoints_path?, attachments_preview_path?, sheets?)` — Async. Runs the full deterministic review pipeline (ported from `wpreview/analyze_excel.py`) via `src/review/`, writes structured `Finding`s to a JSON side store (`assets/results/<review_id>_findings.json`), and returns a summary JSON (counts by severity/status/risk_type, top issues, `review_id`). The agent narrates a Markdown report from the summary; the frontend reads structured findings via `GET /findings/{review_id}`.
+
+- **`src/review/`** — Review engine ported from `analyze_excel.py` (async over `ChatOpenAI`, no `jsonschema`): `models` (Finding + schema), `excel_utils`, `validation` (schema validate/repair + excerpt verification), `llm` (retry/backoff/stats), `hallucination` (cross-validation + adversarial challenge), `checkpoints` (loader + checkpoint LLM review), `attachments` (preview loader + ref matching), `evidence_steps` (evidence↔step LLM check), `procedure_pairs` (rule checks + A-C LLM judgement), `findings_review` (LLM re-review of rule findings), `pipeline` (`run_review` orchestrator). Tests under `tests/review/`.
+
+- **`src/storage/findings_store.py`** — Side store: `save_findings`/`load_findings` to `${COZE_WORKSPACE_PATH}/assets/results/<review_id>_findings.json`.
 
 - **`src/storage/`**:
   - `database/` — PostgreSQL via SQLAlchemy, reads `PGDATABASE_URL` from env or `coze_workload_identity` client. Falls back gracefully if unavailable.
