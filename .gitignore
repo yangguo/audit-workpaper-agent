@@ -54,3 +54,6 @@ logs/
 *.pptx
 *.xlsx
 *.csv
+
+# 审阅结果侧端存储（运行时产物）
+assets/results/
