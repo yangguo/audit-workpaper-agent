@@ -1,10 +1,31 @@
+import json
+
 import openpyxl
+import pytest
+from langchain_core.messages import AIMessage
 
 from review.checkpoints import (
     load_checkpoints_xlsx,
     _split_checkpoints,
     _extract_checkpoint_keywords,
+    _llm_check_sheet_by_checkpoints,
 )
+
+
+class _FakeRunnable:
+    def __init__(self, content):
+        self.content = content
+
+    async def ainvoke(self, messages):
+        return AIMessage(content=self.content)
+
+
+class _FakeLLM:
+    def __init__(self, content):
+        self.content = content
+
+    def bind(self, **kwargs):
+        return _FakeRunnable(self.content)
 
 
 def test_split_checkpoints_strips_numbering():
@@ -54,3 +75,60 @@ def test_load_checkpoints_xlsx_groups_by_sheet(tmp_path):
 
 def test_load_checkpoints_xlsx_empty_path_returns_empty():
     assert load_checkpoints_xlsx("") == {}
+
+
+@pytest.mark.asyncio
+async def test_llm_check_sheet_by_checkpoints_returns_findings(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "表头"
+    ws["A2"] = "用户清单导出记录"
+    payload = json.dumps({
+        "results": [{
+            "id": 1,
+            "checkpoint": "检查用户清单",
+            "status": "fail",
+            "conclusion": "结论文字至少四个字",
+            "reasons": ["理由一"],
+            "evidence_refs": [{"cell_or_range": "A2", "excerpt": "用户清单"}],
+            "severity": "P1",
+            "risk_type": "证据不足",
+            "fix_suggestion": {"supplement_explanation": "补充截图"},
+        }]
+    }, ensure_ascii=False)
+    llm = _FakeLLM(payload)
+
+    findings = await _llm_check_sheet_by_checkpoints(
+        llm=llm, ws_title="SA-1", ws=ws,
+        checkpoints=["检查用户清单"], batch_size=6, sleep_seconds=0,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].issue_type.startswith("LLM判定：")
+    assert findings[0].status == "fail"
+    assert findings[0].severity == "P1"
+
+
+@pytest.mark.asyncio
+async def test_llm_check_sheet_by_checkpoints_degrades_on_failure(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "表头"
+
+    class _ErrRunnable:
+        async def ainvoke(self, messages):
+            raise RuntimeError("timed out")
+
+    class _ErrLLM:
+        def bind(self, **kwargs):
+            return _ErrRunnable()
+
+    findings = await _llm_check_sheet_by_checkpoints(
+        llm=_ErrLLM(), ws_title="SA-1", ws=ws,
+        checkpoints=["检查用户清单"], batch_size=6, sleep_seconds=0,
+    )
+    assert len(findings) == 1
+    assert findings[0].status == "unknown"
+    assert findings[0].issue_type == "LLM判定：检查要点复核失败"
