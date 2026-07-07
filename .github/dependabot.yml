@@ -1,0 +1,31 @@
+# Dependabot 配置：前后端安全更新，原生 auto-merge（squash），
+# minor/patch 合并减少噪音，major 单独 PR 人工确认 breaking。
+# 前提：仓库 Settings → Pull Requests 勾选 "Allow auto-merge"，
+# 且 main 分支保护已把 CI 检查设为 required（见 README 首次启用步骤）。
+version: 2
+auto-merge: true
+updates:
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    auto-merge: true
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    auto-merge: true
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
