@@ -48,6 +48,18 @@ docker run -d \
   audit-workpaper-agent
 ```
 
+## 安全更新自动合并
+
+仓库已配置 dependabot（`.github/dependabot.yml`）+ CI（`.github/workflows/ci.yml`）。dependabot 每周一检查前后端依赖安全更新，开 PR 后 CI 跑测试，通过则自动 squash 合并。
+
+**首次启用需在 GitHub 仓库设置（一次性，手动）**：
+
+1. Settings → General → Pull Requests → 勾选 "Allow auto-merge"，默认合并方式选 **Squash**。
+2. Settings → Branches → `main` → Add branch protection rule → 勾 "Require status checks to pass before merging" → required status checks 选 `backend` 和 `frontend`（CI job 名）。
+3. Settings → Code security → 确认 "Dependabot security updates" 已开启。
+
+完成上述设置后，dependabot 开的安全更新 PR 在 CI 通过后会自动合并到 `main`。major 更新单独成 PR，CI 因 breaking 失败则停住等人工处理。
+
 ## 环境变量
 
 | 变量 | 必填 | 说明 |
