@@ -44,7 +44,7 @@ def _pass_review_payload():
 
 
 def test_findings_store_save_and_load_round_trip(monkeypatch, tmp_path):
-    monkeypatch.setenv("COZE_WORKSPACE_PATH", str(tmp_path))
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     save_findings("rid123", [{"issue_type": "t", "severity": "P1"}], {"total_findings": 1})
     loaded = load_findings("rid123")
     assert loaded is not None
@@ -53,13 +53,13 @@ def test_findings_store_save_and_load_round_trip(monkeypatch, tmp_path):
 
 
 def test_findings_store_load_missing_returns_none(monkeypatch, tmp_path):
-    monkeypatch.setenv("COZE_WORKSPACE_PATH", str(tmp_path))
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     assert load_findings("does-not-exist") is None
 
 
 @pytest.mark.asyncio
 async def test_review_workpaper_tool_starts_background_review(monkeypatch, tmp_path):
-    monkeypatch.setenv("COZE_WORKSPACE_PATH", str(tmp_path))
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
     _REGISTRY.clear()
     uploads = tmp_path / "assets" / "uploads"
@@ -95,7 +95,7 @@ async def test_review_workpaper_tool_starts_background_review(monkeypatch, tmp_p
 
 @pytest.mark.asyncio
 async def test_review_workpaper_tool_missing_file_returns_error(monkeypatch, tmp_path):
-    monkeypatch.setenv("COZE_WORKSPACE_PATH", str(tmp_path))
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     result_str = await rwp.review_workpaper.ainvoke({"file_path": "assets/uploads/missing.xlsx"})
     result = json.loads(result_str)
     assert result["success"] is False

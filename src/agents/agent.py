@@ -29,24 +29,39 @@ class AgentState(MessagesState):
     messages: Annotated[list[AnyMessage], _windowed_messages]
 
 
+def _env_int(key: str, default: int) -> int:
+    try:
+        return int(os.getenv(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def build_agent():
     """构建底稿审阅智能体"""
-    workspace_path = os.getenv("COZE_WORKSPACE_PATH", os.getcwd())
+    workspace_path = os.getenv("WORKSPACE_PATH", os.getcwd())
     config_path = os.path.join(workspace_path, LLM_CONFIG)
 
     with open(config_path, 'r', encoding='utf-8') as f:
         cfg = json.load(f)
 
-    api_key = os.getenv("COZE_WORKLOAD_IDENTITY_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("COZE_INTEGRATION_MODEL_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
 
     llm = ChatOpenAI(
-        model=cfg['config'].get("model"),
+        model=os.getenv("AGENT_LLM_MODEL", "doubao-seed-2-0-pro-260215"),
         api_key=api_key,
         base_url=base_url,
-        temperature=cfg['config'].get('temperature', 0.7),
+        temperature=_env_float("AGENT_LLM_TEMPERATURE", 0.7),
+        max_tokens=_env_int("AGENT_LLM_MAX_TOKENS", 10000),
         streaming=True,
-        timeout=cfg['config'].get('timeout', 600),
+        timeout=_env_int("AGENT_LLM_TIMEOUT", 600),
     )
 
     tools_list = [

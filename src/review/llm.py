@@ -202,8 +202,8 @@ async def _llm_request_json_list(
 
 def get_review_llm() -> ChatOpenAI:
     """Build the ChatOpenAI used by the review engine, from project env."""
-    api_key = os.getenv("COZE_WORKLOAD_IDENTITY_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("COZE_INTEGRATION_MODEL_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     model = os.getenv("REVIEW_LLM_MODEL", "doubao-seed-1-6-251015")
     return ChatOpenAI(
         model=model,

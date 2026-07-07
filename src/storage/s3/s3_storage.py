@@ -24,7 +24,7 @@ class S3SyncStorage:
     """S3兼容存储实现"""
 
     def __init__(self, *, endpoint_url: Optional[str] = None, access_key: str, secret_key: str, bucket_name: str, region: str = "cn-beijing"):
-        self.endpoint_url = os.environ.get("COZE_BUCKET_ENDPOINT_URL") or endpoint_url or ''
+        self.endpoint_url = os.environ.get("S3_ENDPOINT_URL") or endpoint_url or ''
         self.access_key = access_key
         self.secret_key = secret_key
         self.bucket_name = bucket_name
@@ -35,11 +35,11 @@ class S3SyncStorage:
         if self._client is None:
             endpoint = self.endpoint_url
             if not endpoint:
-                endpoint = os.environ.get("COZE_BUCKET_ENDPOINT_URL", "")
+                endpoint = os.environ.get("S3_ENDPOINT_URL", "")
                 self.endpoint_url = endpoint
             if not endpoint:
-                logger.error("未配置存储端点：请设置endpoint_url 或 COZE_BUCKET_ENDPOINT_URL")
-                raise ValueError("未配置存储端点：请设置endpoint_url 或 COZE_BUCKET_ENDPOINT_URL")
+                logger.error("未配置存储端点：请设置endpoint_url 或 S3_ENDPOINT_URL")
+                raise ValueError("未配置存储端点：请设置endpoint_url 或 S3_ENDPOINT_URL")
 
             client = boto3.client(
                 "s3",
@@ -51,7 +51,7 @@ class S3SyncStorage:
 
             # 注册 before-call 钩子，发送前注入 x-storage-token 头
             def _inject_header(**kwargs):
-                token = os.environ.get("COZE_STORAGE_TOKEN", "")
+                token = os.environ.get("S3_STORAGE_TOKEN", "")
                 if token:
                     params = kwargs.get("params", {})
                     headers = params.setdefault("headers", {})
@@ -82,9 +82,9 @@ class S3SyncStorage:
 
     def _resolve_bucket(self, bucket: Optional[str]) -> str:
         """统一解析 bucket 来源，确保得到有效桶名。"""
-        target_bucket = bucket or os.environ.get("COZE_BUCKET_NAME") or self.bucket_name
+        target_bucket = bucket or os.environ.get("S3_BUCKET_NAME") or self.bucket_name
         if not target_bucket:
-            raise ValueError("未配置 bucket：请传入 bucket 或设置 COZE_BUCKET_NAME，或在实例化时提供 bucket_name")
+            raise ValueError("未配置 bucket：请传入 bucket 或设置 S3_BUCKET_NAME，或在实例化时提供 bucket_name")
         return target_bucket
 
     def _validate_file_name(self, name: str) -> None:
@@ -211,13 +211,13 @@ class S3SyncStorage:
         """通过 S3 Proxy 生成签名 URL。"""
         import json
         import urllib.request as urllib_request
-        token = os.environ.get("COZE_STORAGE_TOKEN", "")
+        token = os.environ.get("S3_STORAGE_TOKEN", "")
         if not token:
-            raise RuntimeError("获取 x-storage-token 失败: COZE_STORAGE_TOKEN 未设置")
+            raise RuntimeError("获取 x-storage-token 失败: S3_STORAGE_TOKEN 未设置")
         try:
-            sign_base = os.environ.get("COZE_BUCKET_ENDPOINT_URL") or self.endpoint_url
+            sign_base = os.environ.get("S3_ENDPOINT_URL") or self.endpoint_url
             if not sign_base:
-                raise ValueError("未配置签名端点：请设置 COZE_BUCKET_ENDPOINT_URL 或传入 endpoint_url")
+                raise ValueError("未配置签名端点：请设置 S3_ENDPOINT_URL 或传入 endpoint_url")
             sign_url_endpoint = sign_base.rstrip("/") + "/sign-url"
 
             headers = {

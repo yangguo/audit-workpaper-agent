@@ -34,7 +34,7 @@ async def upload_files(files: list[UploadFile] = File(...)) -> dict[str, Any]:
     if len(files) > MAX_FILES:
         raise HTTPException(status_code=400, detail=f"Too many files (max {MAX_FILES})")
 
-    workspace_path = os.getenv("COZE_WORKSPACE_PATH", os.getcwd())
+    workspace_path = os.getenv("WORKSPACE_PATH", os.getcwd())
     upload_dir = Path(workspace_path) / "assets" / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     upload_dir_resolved = upload_dir.resolve()

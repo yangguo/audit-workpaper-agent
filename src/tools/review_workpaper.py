@@ -46,7 +46,7 @@ async def review_workpaper(
     Returns:
         JSON 字符串，含 review_id、status="running"、status_url、findings_url。
     """
-    workspace_path = os.getenv("COZE_WORKSPACE_PATH", os.getcwd())
+    workspace_path = os.getenv("WORKSPACE_PATH", os.getcwd())
     full_path = _resolve_path(workspace_path, file_path)
     cp_full = _resolve_path(workspace_path, checkpoints_path) if checkpoints_path else ""
     ap_full = _resolve_path(workspace_path, attachments_preview_path) if attachments_preview_path else ""

@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 
 def _results_dir() -> str:
-    workspace = os.getenv("COZE_WORKSPACE_PATH", os.getcwd())
+    workspace = os.getenv("WORKSPACE_PATH", os.getcwd())
     d = os.path.join(workspace, "assets", "results")
     os.makedirs(d, exist_ok=True)
     return d

@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-ENV COZE_WORKSPACE_PATH=/app
+ENV WORKSPACE_PATH=/app
 ENV PYTHONUNBUFFERED=1
 
 COPY pyproject.toml uv.lock ./

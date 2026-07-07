@@ -59,7 +59,7 @@ app.include_router(upload_router)
 
 
 def _is_dev_env() -> bool:
-    return os.getenv("COZE_PROJECT_ENV") == "DEV"
+    return os.getenv("APP_ENV") == "DEV"
 
 
 class GraphService:

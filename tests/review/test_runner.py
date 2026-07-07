@@ -38,7 +38,7 @@ def _pass_payload():
 def _isolate(monkeypatch, tmp_path):
     """Each test gets a clean registry + fake LLM + temp workspace."""
     _REGISTRY.clear()
-    monkeypatch.setenv("COZE_WORKSPACE_PATH", str(tmp_path))
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
     monkeypatch.setattr(runner, "get_review_llm", lambda: _FakeLLM(_pass_payload()))
 

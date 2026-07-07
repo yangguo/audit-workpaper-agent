@@ -9,7 +9,9 @@ import os
 import sys
 
 # 添加 app 目录到 Python 路径
-workspace_path = os.getenv("COZE_WORKSPACE_PATH", "/workspace/projects")
+# 默认 /workspace/projects 为 Coze 平台运行路径（配合 .coze 的 run 命令）；
+# 本地或其他平台请显式设置 WORKSPACE_PATH。
+workspace_path = os.getenv("WORKSPACE_PATH", "/workspace/projects")
 app_dir = os.path.join(workspace_path, 'src')
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)

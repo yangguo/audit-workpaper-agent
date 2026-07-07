@@ -52,15 +52,15 @@ npm run build
   - `GET /findings/{review_id}` — structured review findings (written by `review_workpaper` to a side store)
   - `GET /health`, `GET /graph_parameter`
 
-- **`src/agents/agent.py`** — Agent definition. Loads LLM config from `config/agent_llm_config.json`, creates a `ChatOpenAI` instance (pointing to Doubao model via Ark API at `COZE_INTEGRATION_MODEL_BASE_URL`), and builds a LangChain agent with two tools and a checkpointer. Uses a sliding window of 40 messages.
+- **`src/agents/agent.py`** — Agent definition. Loads system prompt and tools from `config/agent_llm_config.json`; reads model config (`AGENT_LLM_MODEL`, `AGENT_LLM_TEMPERATURE`, `AGENT_LLM_MAX_TOKENS`, `AGENT_LLM_TIMEOUT`) and API credentials (`LLM_API_KEY`, `LLM_BASE_URL`) from environment. Creates a `ChatOpenAI` instance and builds a LangGraph agent with two tools and a checkpointer. Uses a sliding window of 40 messages.
 
 - **`src/tools/`** — Two LangChain tools registered on the agent:
   - `analyze_worksheet(file_path)` — Opens an Excel workbook, auto-detects "标准审计程序" (standard) and "执行程序" (execution) columns by scanning header rows, extracts audit program rows. Used to preview structure before a full review.
-  - `review_workpaper(file_path, checkpoints_path?, attachments_preview_path?, sheets?)` — Async. Runs the full deterministic review pipeline (ported from `wpreview/analyze_excel.py`) via `src/review/`, writes structured `Finding`s to a JSON side store (`assets/results/<review_id>_findings.json`), and returns a summary JSON (counts by severity/status/risk_type, top issues, `review_id`). The agent narrates a Markdown report from the summary; the frontend reads structured findings via `GET /findings/{review_id}`.
+  - `review_workpaper(file_path, checkpoints_path?, attachments_preview_path?, sheets?)` — Async. **Starts** the full deterministic review pipeline (ported from `wpreview/analyze_excel.py`) as a **background task** via `src/review/runner.py` and returns immediately with `{review_id, status:"running", status_url, findings_url}`. The review runs detached (large workpapers take tens of minutes); the frontend polls `GET /review/{review_id}/status` until `completed`, then fetches `GET /findings/{review_id}`. Starting a new review cancels any in-flight one (no stacking). The agent narrates "审阅已启动" from the running status; structured `Finding`s are written to a JSON side store (`assets/results/<review_id>_findings.json`) by the background task.
 
-- **`src/review/`** — Review engine ported from `analyze_excel.py` (async over `ChatOpenAI`, no `jsonschema`): `models` (Finding + schema), `excel_utils`, `validation` (schema validate/repair + excerpt verification), `llm` (retry/backoff/stats), `hallucination` (cross-validation + adversarial challenge), `checkpoints` (loader + checkpoint LLM review), `attachments` (preview loader + ref matching), `evidence_steps` (evidence↔step LLM check), `procedure_pairs` (rule checks + A-C LLM judgement), `findings_review` (LLM re-review of rule findings), `pipeline` (`run_review` orchestrator). Tests under `tests/review/`.
+- **`src/review/`** — Review engine ported from `analyze_excel.py` (async over `ChatOpenAI`, no `jsonschema`): `models` (Finding + schema), `excel_utils`, `validation` (schema validate/repair + excerpt verification), `llm` (retry/backoff/stats), `hallucination` (cross-validation + adversarial challenge), `checkpoints` (loader + checkpoint LLM review), `attachments` (preview loader + ref matching), `evidence_steps` (evidence↔step LLM check), `procedure_pairs` (rule checks + A-C LLM judgement), `findings_review` (LLM re-review of rule findings), `pipeline` (`run_review` orchestrator), `runner` (background task + in-process registry). Tests under `tests/review/`.
 
-- **`src/storage/findings_store.py`** — Side store: `save_findings`/`load_findings` to `${COZE_WORKSPACE_PATH}/assets/results/<review_id>_findings.json`.
+- **`src/storage/findings_store.py`** — Side store: `save_findings`/`load_findings` to `${WORKSPACE_PATH}/assets/results/<review_id>_findings.json`.
 
 - **`src/storage/`**:
   - `database/` — PostgreSQL via SQLAlchemy, reads `PGDATABASE_URL` from env or `coze_workload_identity` client. Falls back gracefully if unavailable.
@@ -79,20 +79,25 @@ npm run build
 
 ### Config
 
-- **`config/agent_llm_config.json`** — LLM model (`doubao-seed-2-0-pro-260215`), temperature, system prompt (`sp`), tool list. The agent loads this at build time.
+- **`config/agent_llm_config.json`** — System prompt (`sp`) and tool list only. Model configuration moved to `.env` (`AGENT_LLM_MODEL`, `AGENT_LLM_TEMPERATURE`, `AGENT_LLM_MAX_TOKENS`, `AGENT_LLM_TIMEOUT`).
 - **`.coze`** — Coze platform project config, defines dev/deploy build/run commands
 
 ## Key Environment Variables
 
 | Variable | Purpose |
 |---|---|
-| `COZE_WORKSPACE_PATH` | Workspace root (defaults to `/workspace/projects`) |
-| `COZE_WORKLOAD_IDENTITY_API_KEY` | LLM API key |
-| `COZE_INTEGRATION_MODEL_BASE_URL` | LLM base URL (Ark API) |
+| `WORKSPACE_PATH` | Workspace root (defaults to cwd) |
+| `APP_ENV` | Set to `DEV` for local development |
+| `LLM_API_KEY` | LLM API key |
+| `LLM_BASE_URL` | LLM base URL |
+| `AGENT_LLM_MODEL` | Agent LLM model (default: `doubao-seed-2-0-pro-260215`) |
+| `AGENT_LLM_TEMPERATURE` | Agent LLM temperature (default: `0.7`) |
+| `AGENT_LLM_MAX_TOKENS` | Agent LLM max tokens (default: `10000`) |
+| `AGENT_LLM_TIMEOUT` | Agent LLM timeout in seconds (default: `600`) |
+| `REVIEW_LLM_MODEL` | Review engine LLM model (default: `doubao-seed-1-6-251015`) |
 | `PGDATABASE_URL` | PostgreSQL connection string (optional) |
 | `FRONTEND_ORIGINS` | CORS origins for frontend (default: `http://localhost:3000`) |
-| `COZE_PROJECT_ENV` | Set to `DEV` for local development |
 
 ## File Upload Path Convention
 
-Uploaded files land at `${COZE_WORKSPACE_PATH}/assets/uploads/<uuid>_<name>`. The API returns relative paths starting from `assets/`. Agent tools resolve relative paths against `COZE_WORKSPACE_PATH`.
+Uploaded files land at `${WORKSPACE_PATH}/assets/uploads/<uuid>_<name>`. The API returns relative paths starting from `assets/`. Agent tools resolve relative paths against `WORKSPACE_PATH`.
