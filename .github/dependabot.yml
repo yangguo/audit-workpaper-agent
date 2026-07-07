@@ -2,8 +2,8 @@
 # minor/patch 合并减少噪音，major 单独 PR 人工确认 breaking。
 # 前提：仓库 Settings → Pull Requests 勾选 "Allow auto-merge"，
 # 且 main 分支保护已把 CI 检查设为 required（见 README 首次启用步骤）。
+# 注意：auto-merge 只能写在每个 updates 条目内，不能放顶层（schema 不允许）。
 version: 2
-auto-merge: true
 updates:
   - package-ecosystem: "npm"
     directory: "/frontend"
