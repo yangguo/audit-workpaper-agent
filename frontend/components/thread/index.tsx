@@ -156,6 +156,7 @@ export function Thread() {
     findings: stream.findings,
     reviewStatus: stream.reviewStatus,
     reviewElapsedSeconds: stream.reviewElapsedSeconds,
+    understoodRequirement: stream.understoodRequirement,
   });
 
   const statusLabel =
@@ -204,6 +205,7 @@ export function Thread() {
         evidenceItems={model.evidenceItems}
         progressSteps={model.progressSteps}
         toolTraces={model.toolTraces}
+        understoodRequirement={model.understoodRequirement}
         isEmpty={isEmpty}
         errorMessage={model.errorMessage}
         runningMessage={model.runningMessage}

@@ -41,7 +41,7 @@ async def review_workpaper(
         file_path: 底稿 Excel 路径（相对于 assets 目录或绝对路径）
         checkpoints_path: 检查要点 Excel 路径（可选）
         attachments_preview_path: 附件预览 Excel 路径（可选）
-        sheets: 指定检查的 Sheet，逗号分隔（可选，留空=全部）
+        sheets: 指定要审阅的 Sheet（即控制点，逗号分隔，可选，留空=全部）。用户指定控制点范围时必须传入对应 Sheet 名（底稿 Tab 名）；若用户用描述性说法而非 Sheet 名，应先调用 analyze_worksheet 映射到确切 Sheet 名后再传入
 
     Returns:
         JSON 字符串，含 review_id、status="running"、status_url、findings_url。

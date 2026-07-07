@@ -12,7 +12,7 @@ import openpyxl
 from review.attachments import _check_attachment_references
 from review.checkpoints import _llm_check_sheet_by_checkpoints
 from review.evidence_steps import _llm_check_evidence_vs_steps
-from review.excel_utils import _detect_layout
+from review.excel_utils import _detect_layout, _normalize_sheet_id
 from review.findings_review import _llm_review_findings
 from review.hallucination import (
     _build_minimal_context,
@@ -83,20 +83,43 @@ async def run_review(
     checkpoints = checkpoints or {}
     attachments_preview = attachments_preview or {}
     filtered = _parse_sheet_filter(sheets)
-    target = filtered or list(wb.sheetnames)
     warning = ""
-    if filtered is not None:
+    if filtered is None:
+        target = list(wb.sheetnames)
+    else:
+        # Resolve requested names to actual workbook tabs, tolerating the
+        # case/dash/space variants an LLM naturally produces (e.g. "pe6" -> "PE-6").
+        # _normalize_sheet_id is the same helper attachments/evidence_steps use
+        # for sheet-id matching.
+        norm_to_actual = {_normalize_sheet_id(s): s for s in wb.sheetnames}
+        resolved: List[str] = []
+        unmatched: List[str] = []
+        seen = set()
+        for req in filtered:
+            actual = norm_to_actual.get(_normalize_sheet_id(req))
+            if actual is None:
+                unmatched.append(req)
+                continue
+            if actual in seen:
+                continue
+            seen.add(actual)
+            resolved.append(actual)
         reviewable = [
-            s for s in target
-            if s in wb.sheetnames and (_detect_layout(wb[s])[0] is not None or checkpoints.get(s))
+            s for s in resolved
+            if _detect_layout(wb[s])[0] is not None or checkpoints.get(s)
         ]
         if not reviewable:
             _logger.warning(
-                "sheets=%r yielded no reviewable sheets (no layout/checkpoints); "
-                "falling back to all sheets", sheets,
+                "sheets=%r yielded no reviewable sheets (resolved=%r unmatched=%r); "
+                "falling back to all sheets", sheets, resolved, unmatched,
             )
             target = list(wb.sheetnames)
-            warning = f"指定的 Sheet（{sheets}）无可审阅内容（无审计程序布局/检查要点），已回退到全部 Sheet。"
+            detail = "无可审阅内容（无审计程序布局/检查要点）" if resolved else "未在底稿中找到"
+            warning = f"指定的 Sheet（{sheets}）{detail}，已回退到全部 Sheet。"
+        else:
+            target = resolved
+            if unmatched:
+                warning = f"部分指定 Sheet 未匹配：{', '.join(unmatched)}；已审阅：{', '.join(resolved)}。"
     _logger.info(
         "run_review start: sheets_arg=%r target=%r wb_sheets=%r "
         "checkpoints_keys=%r preview_items=%r warning=%r",

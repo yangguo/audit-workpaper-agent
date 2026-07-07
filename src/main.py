@@ -101,6 +101,65 @@ class GraphService:
         finally:
             self.running_tasks.pop(run_id, None)
 
+    async def run_streamed(
+        self,
+        payload: Dict[str, Any],
+        ctx: Context,
+        on_messages=None,
+    ) -> Dict[str, Any]:
+        """Run the agent with streaming so intermediate tool messages are visible.
+
+        Unlike `run` (which awaits `ainvoke` and only returns at completion),
+        this iterates `graph.astream(stream_mode="updates")` and invokes
+        `on_messages(accumulated_messages)` after each node emits messages —
+        letting the caller surface tool-call info (e.g. the review_workpaper
+        args) to the UI seconds in, long before the whole task finishes.
+
+        Returns the same shape as `run`: `{"messages": [...]}` (or error dicts).
+
+        Note: `run` returns the graph's final *windowed* state (the agent's
+        reducer keeps the last 40 messages), while this accumulates *every*
+        message emitted across the run. For a single review request (a handful
+        of messages) the two are identical; they only diverge in a long
+        multi-turn session that exceeds the window. The two consumers here
+        (final-AI-text scan and `_extract_review_summary`) both take the *last*
+        matching message, so they remain correct either way.
+        """
+        run_id = ctx.run_id
+        logger.info(f"Starting streamed run with run_id: {run_id}")
+
+        try:
+            graph = self._get_graph()
+            run_config: RunnableConfig = {"configurable": {"thread_id": run_id}}
+
+            messages: list = []
+            async for chunk in graph.astream(payload, config=run_config, stream_mode="updates"):
+                if not isinstance(chunk, dict):
+                    continue
+                for update in chunk.values():
+                    if not isinstance(update, dict):
+                        continue
+                    node_msgs = update.get("messages") or []
+                    for m in node_msgs:
+                        messages.append(m)
+                    if node_msgs and on_messages is not None:
+                        try:
+                            on_messages(messages)
+                        except Exception:
+                            logger.exception(f"on_messages callback error, run_id: {run_id}")
+
+            logger.info(f"Streamed run completed, run_id: {run_id}, messages: {len(messages)}")
+            return {"messages": messages}
+
+        except asyncio.CancelledError:
+            logger.info(f"Streamed run {run_id} was cancelled")
+            return {"status": "cancelled", "run_id": run_id, "message": "Execution was cancelled"}
+        except Exception as e:
+            logger.error(f"Streamed run {run_id} error: {e}\n{traceback.format_exc()}")
+            return {"status": "error", "run_id": run_id, "message": str(e)}
+        finally:
+            self.running_tasks.pop(run_id, None)
+
     async def stream_sse(
         self, payload: Dict[str, Any], ctx: Context
     ) -> AsyncGenerator[str, None]:
@@ -268,19 +327,100 @@ async def get_chat_result(task_id: str):
     }
 
 
-def _extract_review_summary(messages):
-    """Find the latest review_workpaper tool result and return its parsed summary dict."""
-    for m in reversed(messages):
-        if getattr(m, "type", "") == "tool" and getattr(m, "name", "") == "review_workpaper":
+def _tc_name(tc: Any) -> str:
+    """Normalize a tool-call's name across dict / ToolCall-object forms."""
+    if isinstance(tc, dict):
+        return tc.get("name", "") or ""
+    return getattr(tc, "name", "") or ""
+
+
+def _tc_args(tc: Any) -> Dict[str, Any]:
+    if isinstance(tc, dict):
+        return tc.get("args", {}) or {}
+    return getattr(tc, "args", {}) or {}
+
+
+def _extract_tool_call_info(messages) -> Optional[Dict[str, Any]]:
+    """Extract review_workpaper call info (input args + return value) from messages.
+
+    Scans the full message list: AIMessage.tool_calls carries the input args
+    (file_path / sheets / ...); the ToolMessage carries the JSON return value
+    (review_id / status / ...). Returns None if no review_workpaper call is found.
+    """
+    args: Optional[Dict[str, Any]] = None
+    return_value: Dict[str, Any] = {}
+    for m in messages or []:
+        mtype = getattr(m, "type", "")
+        if mtype == "ai":
+            for tc in getattr(m, "tool_calls", None) or []:
+                if _tc_name(tc) == "review_workpaper":
+                    args = _tc_args(tc)
+        elif mtype == "tool" and getattr(m, "name", "") == "review_workpaper":
             content = getattr(m, "content", "")
             if isinstance(content, str):
                 try:
                     data = json.loads(content)
-                    if isinstance(data, dict) and data.get("review_id"):
-                        return data
+                    if isinstance(data, dict):
+                        return_value = data
                 except Exception:
                     pass
-    return None
+    if args is None and not return_value:
+        return None
+    return {"args": args or {}, "return_value": return_value}
+
+
+def _build_understood_requirement(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Deterministically build the 'understood review requirement' view model.
+
+    Pure function over the tool-call args + return value — no LLM, so the
+    displayed summary is always consistent with the actual parameters the
+    agent used (the very thing the user wants to sanity-check).
+    """
+    args = info.get("args", {}) or {}
+    rv = info.get("return_value", {}) or {}
+
+    sheets_raw = str(args.get("sheets") or "").strip()
+    scope = sheets_raw if sheets_raw else "全部 Sheet"
+
+    workpaper = os.path.basename(str(args.get("file_path") or "")) or "（未指定）"
+    checkpoints = os.path.basename(str(args.get("checkpoints_path") or "")) or None
+    attachments = os.path.basename(str(args.get("attachments_preview_path") or "")) or None
+
+    extras: list = []
+    if checkpoints:
+        extras.append(f"检查要点：{checkpoints}")
+    if attachments:
+        extras.append(f"附件预览：{attachments}")
+    extra_text = "，".join(extras)
+
+    summary = f"将审阅 {scope}（底稿：{workpaper}"
+    if extra_text:
+        summary += f"，含{extra_text}"
+    summary += "）"
+
+    return {
+        "review_id": rv.get("review_id"),
+        "status": rv.get("status"),
+        "scope": scope,
+        "sheets_raw": sheets_raw,
+        "workpaper": workpaper,
+        "checkpoints": checkpoints,
+        "attachments_preview": attachments,
+        "summary": summary,
+    }
+
+
+def _extract_review_summary(messages) -> Optional[Dict[str, Any]]:
+    """Find the latest review_workpaper call and return its understood-requirement dict.
+
+    Backward-compatible entry point: returns a dict that always carries
+    `review_id`/`status` (consumed by the existing completion path) plus the
+    richer understood-requirement fields used by the UI card.
+    """
+    info = _extract_tool_call_info(messages)
+    if info is None:
+        return None
+    return _build_understood_requirement(info)
 
 
 @app.get("/findings/{review_id}")
@@ -359,8 +499,38 @@ async def openai_chat_completions(request: Request):
         service.task_results[task_id] = {"status": "processing"}
 
         async def run_agent_background():
+            last_sig: Optional[tuple] = None
+
+            def on_messages(msgs):
+                """Surface the understood review requirement as soon as the
+                review_workpaper tool call is seen — seconds in, not minutes.
+
+                The signature includes review_id/status (not just the summary
+                string) so the enrichment from the ToolMessage (review_id,
+                status="running") fires as a second update after the initial
+                AIMessage(tool_calls) — letting the frontend start review-status
+                polling before the whole agent task completes.
+                """
+                nonlocal last_sig
+                understood = _extract_review_summary(msgs)
+                if understood is None:
+                    return
+                sig = (
+                    understood.get("summary", ""),
+                    understood.get("review_id"),
+                    understood.get("status"),
+                )
+                if sig == last_sig:
+                    return
+                last_sig = sig
+                service.task_results[task_id] = {
+                    "status": "processing",
+                    "review_summary": understood,
+                }
+                logger.info(f"Task {task_id} understood requirement: {understood.get('summary')}")
+
             try:
-                result = await service.run(agent_payload, ctx)
+                result = await service.run_streamed(agent_payload, ctx, on_messages=on_messages)
                 ai_text = ""
                 msgs = result.get("messages", [])
                 for m in reversed(msgs):

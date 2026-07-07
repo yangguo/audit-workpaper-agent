@@ -34,6 +34,17 @@ export type ToolTrace = {
   argsSummary: string;
 };
 
+export type UnderstoodRequirement = {
+  review_id?: string | null;
+  status?: string | null;
+  scope: string;
+  sheets_raw: string;
+  workpaper: string;
+  checkpoints?: string | null;
+  attachments_preview?: string | null;
+  summary: string;
+};
+
 export type WorkbenchViewModel = {
   status: WorkbenchStatus;
   evidenceItems: EvidenceItem[];
@@ -41,6 +52,7 @@ export type WorkbenchViewModel = {
   analysisSections: AnalysisSection[];
   progressSteps: ProgressStep[];
   toolTraces: ToolTrace[];
+  understoodRequirement?: UnderstoodRequirement | null;
   lastUpdatedLabel: string;
   errorMessage?: string;
   runningMessage?: string;

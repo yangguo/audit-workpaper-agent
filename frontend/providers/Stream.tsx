@@ -3,7 +3,7 @@
 import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { v4 as uuidv4 } from "uuid";
-import type { FindingsPayload } from "@/components/workbench/types";
+import type { FindingsPayload, UnderstoodRequirement } from "@/components/workbench/types";
 
 type Message = {
   id: string;
@@ -23,6 +23,7 @@ type StreamContextType = {
   reviewStatus: "idle" | "running" | "completed" | "error";
   reviewElapsedSeconds: number;
   findings: FindingsPayload | null;
+  understoodRequirement: UnderstoodRequirement | null;
   submit: (input?: unknown) => void;
   stop: () => void;
 };
@@ -122,6 +123,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [findings, setFindings] = useState<FindingsPayload | null>(null);
   const [reviewStatus, setReviewStatus] = useState<"idle" | "running" | "completed" | "error">("idle");
   const [reviewElapsedSeconds, setReviewElapsedSeconds] = useState(0);
+  const [understoodRequirement, setUnderstoodRequirement] = useState<UnderstoodRequirement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const reviewAbortRef = useRef<AbortController | null>(null);
 
@@ -152,6 +154,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setFindings(null);
     setReviewStatus("idle");
     setReviewElapsedSeconds(0);
+    setUnderstoodRequirement(null);
     reviewAbortRef.current?.abort();
     reviewAbortRef.current = null;
     setMessages(nextMessages);
@@ -218,6 +221,12 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         if (!pollRes.ok) continue;
 
         const pollData = await pollRes.json();
+
+        // Surface the understood review requirement as soon as the agent has
+        // called review_workpaper — even while the task is still processing.
+        if (pollData?.review_summary) {
+          setUnderstoodRequirement(pollData.review_summary as UnderstoodRequirement);
+        }
 
         if (pollData.status === "completed") {
           aiText = pollData?.choices?.[0]?.message?.content || "";
@@ -301,6 +310,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     reviewStatus,
     reviewElapsedSeconds,
     findings,
+    understoodRequirement,
     submit,
     stop,
   };

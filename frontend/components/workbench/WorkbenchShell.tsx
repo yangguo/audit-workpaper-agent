@@ -6,12 +6,14 @@ import { ResultSummaryCards } from "./ResultSummaryCards";
 import { AnalysisResultPanel } from "./AnalysisResultPanel";
 import { ProgressStatusPanel } from "./ProgressStatusPanel";
 import { ToolTracePanel } from "./ToolTracePanel";
+import { UnderstoodRequirementPanel } from "./UnderstoodRequirementPanel";
 import type {
   AnalysisSection,
   EvidenceItem,
   ProgressStep,
   SummaryMetric,
   ToolTrace,
+  UnderstoodRequirement,
 } from "./types";
 
 export function WorkbenchShell(props: {
@@ -26,6 +28,7 @@ export function WorkbenchShell(props: {
   evidenceItems: EvidenceItem[];
   progressSteps: ProgressStep[];
   toolTraces: ToolTrace[];
+  understoodRequirement?: UnderstoodRequirement | null;
   isEmpty: boolean;
   errorMessage?: string;
   runningMessage?: string;
@@ -49,6 +52,9 @@ export function WorkbenchShell(props: {
           <EvidenceListPanel items={props.evidenceItems} />
         </aside>
         <main className="space-y-4">
+          {props.understoodRequirement ? (
+            <UnderstoodRequirementPanel requirement={props.understoodRequirement} />
+          ) : null}
           <ResultSummaryCards items={props.summaryMetrics} />
           {props.isEmpty ? (
             <EmptyStatePanel />

@@ -75,6 +75,52 @@ describe("WorkbenchShell", () => {
 
     expect(screen.getByText("正在分析底稿… 已运行 8s")).toBeInTheDocument();
   });
+
+  it("renders the understood-requirement card with scope and files when provided", () => {
+    render(
+      <WorkbenchShell
+        header={{ title: "审计底稿审阅", subtitle: "会话 A", statusLabel: "处理中" }}
+        summaryMetrics={[]}
+        analysisSections={[]}
+        evidenceItems={[]}
+        progressSteps={[]}
+        toolTraces={[]}
+        isEmpty={false}
+        understoodRequirement={{
+          review_id: "rid1",
+          status: "running",
+          scope: "PE-6",
+          sheets_raw: "pe6",
+          workpaper: "C22 IT一般控制测试2025v5.xlsx",
+          checkpoints: "检查要点.xlsx",
+          attachments_preview: null,
+          summary: "将审阅 PE-6（底稿：C22 IT一般控制测试2025v5.xlsx，含检查要点：检查要点.xlsx）",
+        }}
+      />,
+    );
+
+    const card = screen.getByTestId("understood-requirement");
+    expect(card).toBeInTheDocument();
+    expect(screen.getByText("PE-6")).toBeInTheDocument();
+    expect(screen.getByText("C22 IT一般控制测试2025v5.xlsx")).toBeInTheDocument();
+    expect(screen.getByText("检查要点.xlsx")).toBeInTheDocument();
+  });
+
+  it("does not render the understood-requirement card when absent", () => {
+    render(
+      <WorkbenchShell
+        header={{ title: "审计底稿审阅", subtitle: "会话 A", statusLabel: "系统正常" }}
+        summaryMetrics={[]}
+        analysisSections={[]}
+        evidenceItems={[]}
+        progressSteps={[]}
+        toolTraces={[]}
+        isEmpty
+      />,
+    );
+
+    expect(screen.queryByTestId("understood-requirement")).not.toBeInTheDocument();
+  });
 });
 
 describe("ReviewIntakePanel", () => {

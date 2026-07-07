@@ -102,4 +102,42 @@ describe("buildWorkbenchViewModel", () => {
     // llm_call_stats surfaced as tool traces
     expect(model.toolTraces.some((t) => t.name.startsWith("checkpoints"))).toBe(true);
   });
+
+  it("passes the understood requirement through to the view model", () => {
+    const understood = {
+      review_id: "rid1",
+      status: "running",
+      scope: "PE-6",
+      sheets_raw: "pe6",
+      workpaper: "C22 IT一般控制测试2025v5.xlsx",
+      checkpoints: "检查要点.xlsx",
+      attachments_preview: null,
+      summary: "将审阅 PE-6（底稿：C22 IT一般控制测试2025v5.xlsx，含检查要点：检查要点.xlsx）",
+    };
+    const model = buildWorkbenchViewModel({
+      status: "running",
+      archiveUrl: "",
+      contentBlocks: [],
+      messages: [],
+      isLoading: false,
+      elapsedSeconds: 3,
+      error: null,
+      understoodRequirement: understood,
+    });
+
+    expect(model.understoodRequirement).toEqual(understood);
+  });
+
+  it("defaults understood requirement to null when not provided", () => {
+    const model = buildWorkbenchViewModel({
+      status: "idle",
+      archiveUrl: "",
+      contentBlocks: [],
+      messages: [],
+      isLoading: false,
+      elapsedSeconds: 0,
+      error: null,
+    });
+    expect(model.understoodRequirement).toBeNull();
+  });
 });

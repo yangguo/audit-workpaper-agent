@@ -5,6 +5,7 @@ import type {
   FindingsPayload,
   ProgressStep,
   ToolTrace,
+  UnderstoodRequirement,
   WorkbenchStatus,
   WorkbenchViewModel,
 } from "./types";
@@ -33,6 +34,7 @@ type Input = {
   findings?: FindingsPayload | null;
   reviewStatus?: "idle" | "running" | "completed" | "error";
   reviewElapsedSeconds?: number;
+  understoodRequirement?: UnderstoodRequirement | null;
 };
 
 function splitSections(content: string): AnalysisSection[] {
@@ -215,6 +217,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
       analysisSections,
       progressSteps,
       toolTraces,
+      understoodRequirement: input.understoodRequirement ?? null,
       lastUpdatedLabel,
       errorMessage,
       runningMessage,
@@ -245,6 +248,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
     analysisSections,
     progressSteps,
     toolTraces,
+    understoodRequirement: input.understoodRequirement ?? null,
     lastUpdatedLabel,
     errorMessage,
     runningMessage,
