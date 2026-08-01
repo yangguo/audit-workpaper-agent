@@ -110,3 +110,52 @@ No Stage B, C, or D status was changed. No frontend, policy-pack, database, queu
 The full suite still reports one existing LangGraph third-party deprecation warning. It is unrelated to these P1 fixes and remains intentionally out of scope.
 
 The final fresh verification and commit SHA are reported in the task handoff because a commit cannot accurately embed its own final SHA.
+
+## Follow-Up: Snapshot Failure V1 Isolation
+
+### RED
+
+Added `test_snapshot_failure_does_not_fail_v1_review`, which injects
+`OSError("snapshot storage unavailable")` from `ReviewArtifactStore.snapshot_inputs()` while the supplied workpaper remains valid.
+
+```bash
+uv run pytest tests/review/test_runner.py::test_snapshot_failure_does_not_fail_v1_review -q
+```
+
+Result before the fix: exit code 1, `1 failed in 0.55s`. The assertion expected `status == "completed"`, but received `"error"`. The captured traceback showed the `asyncio.to_thread()` snapshot exception reached `_run_review`'s outer V1 error handler before V1 loaded the workbook.
+
+### GREEN
+
+`_run_review()` now catches only snapshot creation failures, records a concise artifact error, and then uses the original supplied workpaper, checkpoints, and attachment-preview paths for V1 parsing and review. After V1 saves normal findings, it sets `artifact_status="error"` and `artifact_error`, and intentionally does not schedule `shadow_task`. Successful snapshots retain the existing pinned-path and off-event-loop `asyncio.to_thread()` path unchanged.
+
+The regression then passed:
+
+```text
+1 passed in 0.74s
+```
+
+Follow-up focused verification:
+
+```bash
+uv run pytest tests/review/test_runner.py tests/review/test_evidence.py tests/test_review_artifact_store.py tests/test_integration.py -q
+```
+
+Result: `23 passed, 1 warning in 2.12s`.
+
+Follow-up full verification:
+
+```bash
+uv run pytest tests/ -q
+```
+
+Result: `127 passed, 1 warning in 2.76s`.
+
+The Stage A recorded verification count is now 127. The same pre-existing LangGraph deprecation warning remains out of scope.
+
+### Follow-Up Self-Review
+
+- Snapshot failure no longer changes a valid V1 review's completed status or findings.
+- The fallback uses only the original caller-supplied paths; it does not attempt artifact completion or create a shadow task.
+- Artifact failure is exposed through additive `artifact_status` and `artifact_error` fields, preserving the existing V1 response fields.
+- The successful immutable snapshot path and its off-event-loop copy remain covered by the existing source-mutation regression and focused runner suite.
+- Stage B-D remain pending, and the existing untracked `assets/` directory remains untouched.

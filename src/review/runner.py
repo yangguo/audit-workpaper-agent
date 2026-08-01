@@ -118,16 +118,24 @@ async def _run_review(
     try:
         workspace_path = os.getenv("WORKSPACE_PATH", os.getcwd())
         store = ReviewArtifactStore(workspace_path=workspace_path)
-        snapshot_paths = await asyncio.to_thread(
-            store.snapshot_inputs,
-            review_id,
-            workpaper_path=file_path,
-            checkpoints_path=checkpoints_path,
-            attachments_preview_path=attachments_preview_path,
-        )
-        pinned_file_path = snapshot_paths["workpaper"]
-        pinned_checkpoints_path = snapshot_paths.get("checkpoints", "")
-        pinned_attachments_path = snapshot_paths.get("attachments_preview", "")
+        snapshot_error = None
+        try:
+            snapshot_paths = await asyncio.to_thread(
+                store.snapshot_inputs,
+                review_id,
+                workpaper_path=file_path,
+                checkpoints_path=checkpoints_path,
+                attachments_preview_path=attachments_preview_path,
+            )
+            pinned_file_path = snapshot_paths["workpaper"]
+            pinned_checkpoints_path = snapshot_paths.get("checkpoints", "")
+            pinned_attachments_path = snapshot_paths.get("attachments_preview", "")
+        except Exception as e:
+            snapshot_error = f"{type(e).__name__}: {e}"
+            _logger.exception("review input snapshot %s failed", review_id)
+            pinned_file_path = file_path
+            pinned_checkpoints_path = checkpoints_path
+            pinned_attachments_path = attachments_preview_path
 
         wb = openpyxl.load_workbook(pinned_file_path, data_only=True)
         checkpoints = (
@@ -154,19 +162,23 @@ async def _run_review(
         if entry is not None:
             entry["status"] = "completed"
             entry["stats"] = stats
-            entry["artifact_status"] = "pending"
-            entry["shadow_task"] = asyncio.create_task(
-                _capture_shadow_artifact(
-                    review_id=review_id,
-                    file_path=pinned_file_path,
-                    checkpoints_path=pinned_checkpoints_path,
-                    attachments_preview_path=pinned_attachments_path,
-                    sheets=sheets,
-                    source=source,
-                    findings=findings,
-                    stats=stats,
+            if snapshot_error is not None:
+                entry["artifact_status"] = "error"
+                entry["artifact_error"] = snapshot_error
+            else:
+                entry["artifact_status"] = "pending"
+                entry["shadow_task"] = asyncio.create_task(
+                    _capture_shadow_artifact(
+                        review_id=review_id,
+                        file_path=pinned_file_path,
+                        checkpoints_path=pinned_checkpoints_path,
+                        attachments_preview_path=pinned_attachments_path,
+                        sheets=sheets,
+                        source=source,
+                        findings=findings,
+                        stats=stats,
+                    )
                 )
-            )
         _logger.info("background review %s completed: %d findings", review_id, len(findings))
     except asyncio.CancelledError:
         entry = _REGISTRY.get(review_id)

@@ -190,6 +190,25 @@ async def test_completed_artifact_uses_v1_input_versions_when_sources_change(
 
 
 @pytest.mark.asyncio
+async def test_snapshot_failure_does_not_fail_v1_review(monkeypatch, tmp_path):
+    def _fail_snapshot(*args, **kwargs):
+        raise OSError("snapshot storage unavailable")
+
+    monkeypatch.setattr(ReviewArtifactStore, "snapshot_inputs", _fail_snapshot)
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+
+    status = get_status(review_id)
+    assert status["status"] == "completed"
+    assert status["artifact_status"] == "error"
+    assert status["artifact_error"] == "OSError: snapshot storage unavailable"
+    assert load_findings(review_id) is not None
+    assert "shadow_task" not in _REGISTRY[review_id]
+    assert not (tmp_path / "assets" / "reviews" / review_id / "manifest.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_shadow_failure_does_not_fail_existing_review(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner,
