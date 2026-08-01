@@ -17,16 +17,24 @@ async def _isolate_background_tasks():
     _REGISTRY.clear()
     yield
 
-    tasks = [
-        entry[key]
+    review_tasks = [
+        entry["task"]
         for entry in _REGISTRY.values()
-        for key in ("task", "shadow_task")
-        if isinstance(entry.get(key), asyncio.Task) and not entry[key].done()
+        if isinstance(entry.get("task"), asyncio.Task) and not entry["task"].done()
     ]
-    for task in tasks:
+    for task in review_tasks:
         task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if review_tasks:
+        await asyncio.gather(*review_tasks, return_exceptions=True)
+
+    shadow_tasks = [
+        entry["shadow_task"]
+        for entry in _REGISTRY.values()
+        if isinstance(entry.get("shadow_task"), asyncio.Task)
+        and not entry["shadow_task"].done()
+    ]
+    if shadow_tasks:
+        await asyncio.gather(*shadow_tasks, return_exceptions=True)
 
 
 class _FakeRunnable:

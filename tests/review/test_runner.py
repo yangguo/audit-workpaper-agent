@@ -48,16 +48,24 @@ async def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "get_review_llm", lambda: _FakeLLM(_pass_payload()))
     yield
 
-    tasks = [
-        entry[key]
+    review_tasks = [
+        entry["task"]
         for entry in _REGISTRY.values()
-        for key in ("task", "shadow_task")
-        if isinstance(entry.get(key), asyncio.Task) and not entry[key].done()
+        if isinstance(entry.get("task"), asyncio.Task) and not entry["task"].done()
     ]
-    for task in tasks:
+    for task in review_tasks:
         task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if review_tasks:
+        await asyncio.gather(*review_tasks, return_exceptions=True)
+
+    shadow_tasks = [
+        entry["shadow_task"]
+        for entry in _REGISTRY.values()
+        if isinstance(entry.get("shadow_task"), asyncio.Task)
+        and not entry["shadow_task"].done()
+    ]
+    if shadow_tasks:
+        await asyncio.gather(*shadow_tasks, return_exceptions=True)
 
 
 def _make_workbook(tmp_path):
@@ -166,6 +174,72 @@ async def test_shadow_artifact_capture_keeps_event_loop_responsive(monkeypatch, 
         release_capture.set()
         timer.cancel()
         await shadow_task
+
+
+@pytest.mark.asyncio
+async def test_cancelled_shadow_capture_retains_its_original_workspace(monkeypatch, tmp_path):
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    capture_finished = threading.Event()
+    observed = {}
+    original_build_input_files = runner.build_input_files
+
+    class _RecordingArtifactStore:
+        def __init__(self, *, workspace_path=None):
+            self.workspace_path = workspace_path
+
+        def begin(self, manifest):
+            observed["workspace_path"] = self.workspace_path or runner.os.getenv(
+                "WORKSPACE_PATH"
+            )
+
+        def write_evidence(self, review_id, graph):
+            return None
+
+        def write_v1_findings(self, review_id, findings, stats):
+            return None
+
+        def complete(self, review_id):
+            capture_finished.set()
+            return None
+
+        def fail(self, review_id, error):
+            capture_finished.set()
+            return None
+
+    def _blocked_build_input_files(*args, **kwargs):
+        capture_started.set()
+        release_capture.wait(timeout=0.5)
+        return original_build_input_files(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "ReviewArtifactStore", _RecordingArtifactStore)
+    monkeypatch.setattr(runner, "build_input_files", _blocked_build_input_files)
+    review_id = "shadow-cleanup"
+    _REGISTRY[review_id] = {"status": "completed"}
+    shadow_task = asyncio.create_task(
+        runner._capture_shadow_artifact(
+            review_id=review_id,
+            file_path=_make_workbook(tmp_path),
+            checkpoints_path="",
+            attachments_preview_path="",
+            sheets=None,
+            source="wp.xlsx",
+            findings=[],
+            stats={},
+        )
+    )
+
+    await asyncio.to_thread(capture_started.wait, 0.5)
+    shadow_task.cancel()
+    await asyncio.gather(shadow_task, return_exceptions=True)
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path / "restored-workspace"))
+    release_capture.set()
+    try:
+        await asyncio.wait_for(asyncio.to_thread(capture_finished.wait, 0.5), 0.6)
+        assert observed["workspace_path"] == str(tmp_path)
+    finally:
+        release_capture.set()
+        await asyncio.to_thread(capture_finished.wait, 0.5)
 
 
 @pytest.mark.asyncio

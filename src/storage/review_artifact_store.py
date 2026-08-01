@@ -17,8 +17,13 @@ _SAFE_REVIEW_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 class ReviewArtifactStore:
     """Persist shadow artifacts separately from the existing findings store."""
 
+    def __init__(self, *, workspace_path: str | Path | None = None) -> None:
+        self._workspace_path = Path(workspace_path) if workspace_path else None
+
     def _root_dir(self) -> Path:
-        workspace = Path(os.getenv("WORKSPACE_PATH", os.getcwd()))
+        workspace = self._workspace_path or Path(
+            os.getenv("WORKSPACE_PATH", os.getcwd())
+        )
         root = workspace / "assets" / "reviews"
         root.mkdir(parents=True, exist_ok=True)
         return root

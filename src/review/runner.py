@@ -179,6 +179,7 @@ async def _capture_shadow_artifact(
     entry = _REGISTRY.get(review_id)
     if entry is not None:
         entry["artifact_status"] = "running"
+    workspace_path = os.getenv("WORKSPACE_PATH", os.getcwd())
 
     try:
         error = await asyncio.to_thread(
@@ -191,6 +192,7 @@ async def _capture_shadow_artifact(
             source=source,
             findings=findings,
             stats=stats,
+            workspace_path=workspace_path,
         )
     except Exception as e:
         error = f"{type(e).__name__}: {e}"
@@ -216,9 +218,10 @@ def _write_shadow_artifact(
     source: str,
     findings: list[dict],
     stats: dict,
+    workspace_path: str,
 ) -> Optional[str]:
     """Run synchronous artifact capture off the event-loop thread."""
-    store = ReviewArtifactStore()
+    store = ReviewArtifactStore(workspace_path=workspace_path)
     try:
         inputs = build_input_files(
             workpaper_path=file_path,
