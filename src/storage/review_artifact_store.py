@@ -74,6 +74,55 @@ class ReviewArtifactStore:
             raise
         return path
 
+    @staticmethod
+    def _atomic_copy(source: Path, destination: Path) -> Path:
+        if not source.is_file():
+            raise FileNotFoundError(str(source))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temp_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        try:
+            with source.open("rb") as source_handle, os.fdopen(
+                file_descriptor, "wb"
+            ) as destination_handle:
+                while chunk := source_handle.read(1024 * 1024):
+                    destination_handle.write(chunk)
+                destination_handle.flush()
+                os.fsync(destination_handle.fileno())
+            os.replace(temp_name, destination)
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+            raise
+        return destination
+
+    def snapshot_inputs(
+        self,
+        review_id: str,
+        *,
+        workpaper_path: str,
+        checkpoints_path: str = "",
+        attachments_preview_path: str = "",
+    ) -> dict[str, str]:
+        """Pin every supplied input once for both V1 and artifact capture."""
+        snapshots: dict[str, str] = {}
+        for role, raw_path in (
+            ("workpaper", workpaper_path),
+            ("checkpoints", checkpoints_path),
+            ("attachments_preview", attachments_preview_path),
+        ):
+            if not raw_path:
+                continue
+            source = Path(raw_path)
+            destination = self._artifact_dir(review_id) / "inputs" / role / source.name
+            snapshots[role] = str(self._atomic_copy(source, destination))
+        return snapshots
+
     def _manifest_path(self, review_id: str) -> Path:
         return self._artifact_dir(review_id) / "manifest.json"
 

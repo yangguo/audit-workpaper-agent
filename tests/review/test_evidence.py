@@ -1,8 +1,10 @@
+import json
 import hashlib
 
 import openpyxl
+from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
-from review.evidence import build_evidence_graph, build_input_files
+from review.evidence import build_evidence_graph, build_input_files, sha256_file
 
 
 def test_build_input_files_hashes_workpaper_and_optional_inputs(tmp_path):
@@ -49,6 +51,62 @@ def test_build_evidence_graph_is_deterministic_and_preserves_formula():
     assert first.sheets[0].sheet_hash == second.sheets[0].sheet_hash
     assert formula_cell.value == "=1+1"
     assert formula_cell.formula == "=1+1"
+
+
+def test_modern_formulas_are_stable_across_independent_reloads(tmp_path):
+    path = tmp_path / "modern-formulas.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet["A1"] = ArrayFormula(ref="A1:A2", text="=SEQUENCE(2)")
+    sheet["B1"] = DataTableFormula(
+        ref="B1:C2",
+        ca=True,
+        dt2D=True,
+        dtr=False,
+        r1="A1",
+        r2="A2",
+        del1=False,
+        del2=True,
+    )
+    workbook.save(path)
+    source_sha256 = sha256_file(path)
+
+    first = build_evidence_graph(
+        openpyxl.load_workbook(path, data_only=False),
+        source_sha256=source_sha256,
+    )
+    second = build_evidence_graph(
+        openpyxl.load_workbook(path, data_only=False),
+        source_sha256=source_sha256,
+    )
+    first_cells = {cell.coordinate: cell for cell in first.sheets[0].cells}
+    second_cells = {cell.coordinate: cell for cell in second.sheets[0].cells}
+
+    assert first_cells["A1"].content_hash == second_cells["A1"].content_hash
+    assert first_cells["A1"].evidence_id == second_cells["A1"].evidence_id
+    assert first_cells["B1"].content_hash == second_cells["B1"].content_hash
+    assert first_cells["B1"].evidence_id == second_cells["B1"].evidence_id
+
+    array_formula = json.loads(first_cells["A1"].formula)
+    assert array_formula == {
+        "ref": "A1:A2",
+        "t": "array",
+        "text": "=SEQUENCE(2)",
+    }
+    data_table_formula = json.loads(first_cells["B1"].formula)
+    assert data_table_formula == {
+        "ca": True,
+        "del1": False,
+        "del2": True,
+        "dt2D": True,
+        "dtr": False,
+        "r1": "A1",
+        "r2": "A2",
+        "ref": "B1:C2",
+        "t": "dataTable",
+    }
+    assert first_cells["A1"].value == first_cells["A1"].formula
+    assert first_cells["B1"].value == first_cells["B1"].formula
 
 
 def test_build_evidence_graph_marks_explicit_truncation():

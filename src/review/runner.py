@@ -116,11 +116,29 @@ async def _run_review(
     source: str,
 ) -> None:
     try:
-        wb = openpyxl.load_workbook(file_path, data_only=True)
-        checkpoints = load_checkpoints_xlsx(checkpoints_path) if checkpoints_path else {}
+        workspace_path = os.getenv("WORKSPACE_PATH", os.getcwd())
+        store = ReviewArtifactStore(workspace_path=workspace_path)
+        snapshot_paths = await asyncio.to_thread(
+            store.snapshot_inputs,
+            review_id,
+            workpaper_path=file_path,
+            checkpoints_path=checkpoints_path,
+            attachments_preview_path=attachments_preview_path,
+        )
+        pinned_file_path = snapshot_paths["workpaper"]
+        pinned_checkpoints_path = snapshot_paths.get("checkpoints", "")
+        pinned_attachments_path = snapshot_paths.get("attachments_preview", "")
+
+        wb = openpyxl.load_workbook(pinned_file_path, data_only=True)
+        checkpoints = (
+            load_checkpoints_xlsx(pinned_checkpoints_path)
+            if pinned_checkpoints_path
+            else {}
+        )
         attachments_preview = (
-            load_attachments_preview_xlsx(attachments_preview_path)
-            if attachments_preview_path else {}
+            load_attachments_preview_xlsx(pinned_attachments_path)
+            if pinned_attachments_path
+            else {}
         )
         LLM_CALL_STATS.clear()
         llm = get_review_llm()
@@ -140,9 +158,9 @@ async def _run_review(
             entry["shadow_task"] = asyncio.create_task(
                 _capture_shadow_artifact(
                     review_id=review_id,
-                    file_path=file_path,
-                    checkpoints_path=checkpoints_path,
-                    attachments_preview_path=attachments_preview_path,
+                    file_path=pinned_file_path,
+                    checkpoints_path=pinned_checkpoints_path,
+                    attachments_preview_path=pinned_attachments_path,
                     sheets=sheets,
                     source=source,
                     findings=findings,

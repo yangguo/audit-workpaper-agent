@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import threading
 
 import openpyxl
@@ -9,6 +10,7 @@ from langchain_core.messages import AIMessage
 
 import review.runner as runner
 from review.runner import start_review, get_status, cancel_all_running, list_running, _REGISTRY
+from review.evidence import sha256_file
 from storage.findings_store import load_findings
 from storage.review_artifact_store import ReviewArtifactStore
 
@@ -119,6 +121,72 @@ async def test_completed_review_starts_shadow_artifact_without_changing_v1_resul
     assert get_status(review_id)["artifact_status"] == "completed"
     assert load_findings(review_id)["review_id"] == review_id
     assert ReviewArtifactStore().load_manifest(review_id)["artifact_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_completed_artifact_uses_v1_input_versions_when_sources_change(
+    monkeypatch, tmp_path
+):
+    workpaper_path = _make_workbook(tmp_path)
+    workpaper = openpyxl.load_workbook(workpaper_path)
+    workpaper.active["A1"] = "ORIGINAL-WORKPAPER"
+    workpaper.save(workpaper_path)
+
+    checkpoints_path = tmp_path / "checkpoints.xlsx"
+    checkpoints = openpyxl.Workbook()
+    checkpoints.active["A1"] = "SA-4c"
+    checkpoints.active["C1"] = "ORIGINAL-CHECKPOINT"
+    checkpoints.save(checkpoints_path)
+
+    attachments_path = tmp_path / "attachments.xlsx"
+    attachments = openpyxl.Workbook()
+    attachments.active.title = "图片描述"
+    attachments.active["A1"] = "附件文件名"
+    attachments.active["B1"] = "详细描述"
+    attachments.active["A2"] = "evidence.png"
+    attachments.active["B2"] = "ORIGINAL-ATTACHMENT"
+    attachments.save(attachments_path)
+
+    source_paths = [workpaper_path, str(checkpoints_path), str(attachments_path)]
+    original_hashes = [sha256_file(path) for path in source_paths]
+
+    def _replace_workbook(path, value):
+        replacement = openpyxl.Workbook()
+        replacement.active["A1"] = value
+        replacement.save(path)
+
+    async def _mutating_review(*, wb, checkpoints, attachments_preview, **kwargs):
+        assert wb.active["A1"].value == "ORIGINAL-WORKPAPER"
+        assert checkpoints == {"SA-4c": ["ORIGINAL-CHECKPOINT"]}
+        assert "ORIGINAL-ATTACHMENT" in str(attachments_preview)
+        _replace_workbook(workpaper_path, "REPLACED-WORKPAPER")
+        _replace_workbook(checkpoints_path, "REPLACED-CHECKPOINT")
+        _replace_workbook(attachments_path, "REPLACED-ATTACHMENT")
+        return ([{"issue_type": "V1-ORIGINAL"}], {"total_findings": 1})
+
+    monkeypatch.setattr(runner, "run_review", _mutating_review)
+    review_id = await start_review(
+        file_path=workpaper_path,
+        checkpoints_path=str(checkpoints_path),
+        attachments_preview_path=str(attachments_path),
+        source="wp.xlsx",
+    )
+
+    await _REGISTRY[review_id]["task"]
+    await _REGISTRY[review_id]["shadow_task"]
+
+    artifact_dir = tmp_path / "assets" / "reviews" / review_id
+    manifest = json.loads((artifact_dir / "manifest.json").read_text("utf-8"))
+    evidence = json.loads((artifact_dir / "evidence.json").read_text("utf-8"))
+    artifact_findings = json.loads(
+        (artifact_dir / "findings.json").read_text("utf-8")
+    )
+
+    assert get_status(review_id)["artifact_status"] == "completed"
+    assert [item["sha256"] for item in manifest["inputs"]] == original_hashes
+    assert [sha256_file(path) for path in source_paths] != original_hashes
+    assert evidence["sheets"][0]["cells"][0]["value"] == "ORIGINAL-WORKPAPER"
+    assert artifact_findings["findings"] == [{"issue_type": "V1-ORIGINAL"}]
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import openpyxl
+from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
 from review.contracts import CellEvidence, EvidenceGraph, InputFile, SheetEvidence
 from review.excel_utils import _detect_layout, _is_empty, _normalize_sheet_id
@@ -71,11 +72,39 @@ def _snapshot_limit(max_cells: int | None) -> int:
 
 def _json_value(value: Any) -> str:
     """Represent openpyxl values deterministically for JSON and hashing."""
+    if isinstance(value, ArrayFormula):
+        return json.dumps(
+            {"t": value.t, "ref": value.ref, "text": value.text},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    if isinstance(value, DataTableFormula):
+        return json.dumps(
+            {
+                "t": value.t,
+                "ref": value.ref,
+                "ca": _formula_flag(value.ca),
+                "dt2D": _formula_flag(value.dt2D),
+                "dtr": _formula_flag(value.dtr),
+                "r1": value.r1,
+                "r2": value.r2,
+                "del1": _formula_flag(value.del1),
+                "del2": _formula_flag(value.del2),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, bytes):
         return value.hex()
     return str(value)
+
+
+def _formula_flag(value: Any) -> bool:
+    return value is True or value == 1 or str(value).lower() in {"1", "true"}
 
 
 def _digest_payload(payload: dict[str, Any]) -> str:
