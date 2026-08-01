@@ -141,3 +141,21 @@ def test_build_evidence_graph_records_detected_layout_and_merged_ranges():
     assert sheet.standard_column == 1
     assert sheet.execution_columns == [2]
     assert sheet.merged_ranges == ["A2:B2"]
+
+
+def test_sheet_hash_covers_merged_range_metadata():
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "PE-6"
+    sheet["A1"] = "标准审计程序"
+    sheet["B1"] = "执行审计程序"
+    sheet["A2"] = "保持不变的单元格值"
+
+    before_merge = build_evidence_graph(workbook, source_sha256="a" * 64)
+    sheet.merge_cells("A2:B2")
+    after_merge = build_evidence_graph(workbook, source_sha256="a" * 64)
+
+    assert [cell.coordinate for cell in before_merge.sheets[0].cells] == [
+        cell.coordinate for cell in after_merge.sheets[0].cells
+    ]
+    assert before_merge.sheets[0].sheet_hash != after_merge.sheets[0].sheet_hash

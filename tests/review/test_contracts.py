@@ -1,3 +1,5 @@
+import pytest
+
 from review.contracts import (
     CellEvidence,
     EvidenceGraph,
@@ -49,3 +51,23 @@ def test_evidence_graph_serializes_captured_cell():
     )
 
     assert graph.model_dump(mode="json")["sheets"][0]["cells"][0]["evidence_id"] == "ev:1"
+
+
+def test_evidence_graph_rejects_inconsistent_capture_counts():
+    with pytest.raises(ValueError, match="captured_cell_count"):
+        EvidenceGraph(
+            source_sha256="d" * 64,
+            sheets=[],
+            captured_cell_count=1,
+            omitted_cell_count=0,
+            capture_status="complete",
+        )
+
+    with pytest.raises(ValueError, match="capture_status"):
+        EvidenceGraph(
+            source_sha256="d" * 64,
+            sheets=[],
+            captured_cell_count=0,
+            omitted_cell_count=1,
+            capture_status="complete",
+        )

@@ -147,12 +147,26 @@ def _cell_evidence(cell, source_sha256: str, sheet_name: str) -> CellEvidence:
     )
 
 
-def _sheet_hash(ws, cells: list[CellEvidence]) -> str:
+def _sheet_hash(
+    ws,
+    cells: list[CellEvidence],
+    *,
+    normalized_name: str,
+    layout_header_row: int | None,
+    standard_column: int | None,
+    execution_columns: list[int],
+    merged_ranges: list[str],
+) -> str:
     return _digest_payload(
         {
             "sheet_name": ws.title,
+            "normalized_name": normalized_name,
             "max_row": ws.max_row or 0,
             "max_column": ws.max_column or 0,
+            "layout_header_row": layout_header_row,
+            "standard_column": standard_column,
+            "execution_columns": execution_columns,
+            "merged_ranges": merged_ranges,
             "cells": [
                 {"coordinate": cell.coordinate, "content_hash": cell.content_hash}
                 for cell in cells
@@ -175,6 +189,8 @@ def build_evidence_graph(
 
     for ws in wb.worksheets:
         header_row, standard_column, execution_columns = _detect_layout(ws)
+        normalized_name = _normalize_sheet_id(ws.title)
+        merged_ranges = sorted(str(rng) for rng in ws.merged_cells.ranges)
         cells: list[CellEvidence] = []
         for row in ws.iter_rows(values_only=False):
             for cell in row:
@@ -189,14 +205,22 @@ def build_evidence_graph(
         sheets.append(
             SheetEvidence(
                 name=ws.title,
-                normalized_name=_normalize_sheet_id(ws.title),
-                sheet_hash=_sheet_hash(ws, cells),
+                normalized_name=normalized_name,
+                sheet_hash=_sheet_hash(
+                    ws,
+                    cells,
+                    normalized_name=normalized_name,
+                    layout_header_row=header_row,
+                    standard_column=standard_column or None,
+                    execution_columns=execution_columns,
+                    merged_ranges=merged_ranges,
+                ),
                 max_row=ws.max_row or 0,
                 max_column=ws.max_column or 0,
                 layout_header_row=header_row,
                 standard_column=standard_column or None,
                 execution_columns=execution_columns,
-                merged_ranges=sorted(str(rng) for rng in ws.merged_cells.ranges),
+                merged_ranges=merged_ranges,
                 cells=cells,
             )
         )

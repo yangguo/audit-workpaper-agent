@@ -13,7 +13,7 @@
 ## Implementation record
 
 - Tasks 1–4 are implemented: typed V2 shadow-artifact contracts, hashed input manifest and bounded workbook Evidence Graph, atomic artifact storage, and non-blocking runner capture using `asyncio.to_thread`.
-- Task 5 verification ran `uv run pytest tests/ -q`: **127 passed, 1 warning**. The warning is LangGraph's third-party deprecation notice for `AgentStatePydantic`; it does not report a test failure, but the run is not warning-free.
+- Task 5 verification ran `uv run pytest tests/ -q`: **129 passed, 1 warning**. The warning is LangGraph's third-party deprecation notice for `AgentStatePydantic`; it does not report a test failure, but the run is not warning-free.
 - The completion boundary is intentionally limited to Stage A: V1 review status and findings remain authoritative and compatible; artifact failures are isolated from the completed V1 review. No policy-pack executor, V2 finding projection, LLM judgement/verifier, golden-set evaluation, feedback API, database/queue, multi-tenancy, RBAC, approval workflow, or enterprise-readiness claim is included.
 
 ## Constraints

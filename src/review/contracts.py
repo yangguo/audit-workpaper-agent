@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 SCHEMA_VERSION = "2.0"
@@ -53,6 +53,25 @@ class EvidenceGraph(BaseModel):
     captured_cell_count: int
     omitted_cell_count: int
     capture_status: CaptureStatus
+
+    @model_validator(mode="after")
+    def _validate_capture_counts(self) -> "EvidenceGraph":
+        actual_captured = sum(len(sheet.cells) for sheet in self.sheets)
+        if self.captured_cell_count != actual_captured:
+            raise ValueError(
+                "captured_cell_count must equal the number of retained cells"
+            )
+        if self.omitted_cell_count < 0:
+            raise ValueError("omitted_cell_count must not be negative")
+        if self.capture_status == "complete" and self.omitted_cell_count:
+            raise ValueError(
+                "capture_status must be truncated when cells are omitted"
+            )
+        if self.capture_status == "truncated" and not self.omitted_cell_count:
+            raise ValueError(
+                "capture_status must be complete when no cells are omitted"
+            )
+        return self
 
 
 class ReviewManifest(BaseModel):
