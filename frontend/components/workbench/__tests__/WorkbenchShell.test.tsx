@@ -93,6 +93,7 @@ describe("WorkbenchShell", () => {
           sheets_raw: "pe6",
           workpaper: "C22 IT一般控制测试2025v5.xlsx",
           checkpoints: "检查要点.xlsx",
+          attachments_dir: "dir-1",
           attachments_preview: null,
           summary: "将审阅 PE-6（底稿：C22 IT一般控制测试2025v5.xlsx，含检查要点：检查要点.xlsx）",
         }}
@@ -104,6 +105,7 @@ describe("WorkbenchShell", () => {
     expect(screen.getByText("PE-6")).toBeInTheDocument();
     expect(screen.getByText("C22 IT一般控制测试2025v5.xlsx")).toBeInTheDocument();
     expect(screen.getByText("检查要点.xlsx")).toBeInTheDocument();
+    expect(screen.getByText("dir-1")).toBeInTheDocument();
   });
 
   it("does not render the understood-requirement card when absent", () => {
@@ -138,12 +140,15 @@ describe("ReviewIntakePanel", () => {
         onToggleUrlInput={() => {}}
         onSubmit={(event) => event.preventDefault()}
         onFileUpload={() => {}}
+        onAttachmentDirectoryUpload={() => {}}
+        attachmentDirectoryFileCount={0}
         onPaste={() => {}}
       />,
     );
 
     expect(screen.getByLabelText("文件下载链接")).toBeInTheDocument();
     expect(screen.getByLabelText("审阅要求")).toBeInTheDocument();
+    expect(screen.getByLabelText("上传附件目录")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开始分析" })).toBeInTheDocument();
     await user.tab();
   });

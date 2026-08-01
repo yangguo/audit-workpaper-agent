@@ -4,7 +4,7 @@ import hashlib
 import openpyxl
 from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
-from review.evidence import build_evidence_graph, build_input_files, sha256_file
+from review.evidence import build_evidence_graph, build_input_files, sha256_file, sha256_path
 
 
 def test_build_input_files_hashes_workpaper_and_optional_inputs(tmp_path):
@@ -29,6 +29,25 @@ def test_build_input_files_hashes_workpaper_and_optional_inputs(tmp_path):
     assert inputs[0].filename == "wp.xlsx"
     assert inputs[0].size == len(b"workpaper")
     assert inputs[0].sha256 == hashlib.sha256(b"workpaper").hexdigest()
+
+
+def test_build_input_files_records_attachment_directory_digest(tmp_path):
+    workpaper = tmp_path / "wp.xlsx"
+    workpaper.write_bytes(b"workpaper")
+    attachments_dir = tmp_path / "attachments"
+    (attachments_dir / "SA-4c").mkdir(parents=True)
+    evidence = attachments_dir / "SA-4c" / "evidence.txt"
+    evidence.write_text("evidence", encoding="utf-8")
+
+    inputs = build_input_files(
+        workpaper_path=str(workpaper),
+        attachments_dir=str(attachments_dir),
+    )
+
+    assert [item.role for item in inputs] == ["workpaper", "attachments_dir"]
+    assert inputs[1].media_type == "inode/directory"
+    assert inputs[1].size == len(b"evidence")
+    assert inputs[1].sha256 == sha256_path(attachments_dir)
 
 
 def test_build_evidence_graph_is_deterministic_and_preserves_formula():

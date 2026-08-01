@@ -17,7 +17,9 @@ export function UnderstoodRequirementPanel(props: {
     { icon: FileCheck2, label: "底稿", value: r.workpaper },
   ];
   if (r.checkpoints) files.push({ icon: Layers, label: "检查要点", value: r.checkpoints });
-  if (r.attachments_preview)
+  if (r.attachments_dir)
+    files.push({ icon: Paperclip, label: "附件目录", value: r.attachments_dir });
+  else if (r.attachments_preview)
     files.push({ icon: Paperclip, label: "附件预览", value: r.attachments_preview });
 
   return (

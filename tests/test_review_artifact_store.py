@@ -93,6 +93,25 @@ def test_artifact_store_marks_failure_without_marking_completed(monkeypatch, tmp
     assert manifest["artifact_error"] == "RuntimeError: boom"
 
 
+def test_snapshot_inputs_preserves_attachment_directory_structure(tmp_path):
+    source = tmp_path / "uploads" / "attachments"
+    (source / "SA-4c").mkdir(parents=True)
+    (source / "SA-4c" / "evidence.txt").write_text("evidence", encoding="utf-8")
+    workpaper = tmp_path / "workpaper.xlsx"
+    workpaper.write_bytes(b"workpaper")
+
+    store = ReviewArtifactStore(workspace_path=tmp_path)
+    snapshots = store.snapshot_inputs(
+        "review-dir",
+        workpaper_path=str(workpaper),
+        attachments_dir=str(source),
+    )
+
+    pinned = tmp_path / "assets" / "reviews" / "review-dir" / "inputs" / "attachments_dir" / "attachments"
+    assert snapshots["attachments_dir"] == str(pinned)
+    assert (pinned / "SA-4c" / "evidence.txt").read_text("utf-8") == "evidence"
+
+
 def test_artifact_store_rejects_unsafe_review_id(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     store = ReviewArtifactStore()

@@ -19,6 +19,16 @@ const SUPPORTED_EXTENSIONS = [
   ".doc",
   ".pptx",
   ".ppt",
+  ".txt",
+  ".json",
+  ".xml",
+  ".log",
+  ".md",
+  ".html",
+  ".htm",
+  ".png",
+  ".jpg",
+  ".jpeg",
 ];
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
@@ -37,6 +47,7 @@ interface UseFileUploadOptions {
 
 export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {}) {
   const [contentBlocks, setContentBlocks] = useState<ContentBlock[]>(initialBlocks);
+  const [attachmentDirectoryFiles, setAttachmentDirectoryFiles] = useState<File[]>([]);
   const dropRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -82,6 +93,39 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
     }
   };
 
+  const uploadAttachmentDirectory = async (files: File[]) => {
+    const fd = new FormData();
+    fd.append("upload_mode", "attachments_dir");
+    files.forEach((file) => {
+      const relativePath =
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      fd.append("files", file, file.name);
+      fd.append("relative_paths", relativePath);
+    });
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+    try {
+      const res = await fetch(`${backendUrl}/upload`, {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      const rawText = await res.text();
+      let data: { directory?: string; error?: string; detail?: string } = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(rawText || `Upload failed (${res.status})`);
+      }
+      if (!res.ok) throw new Error(data?.error || data?.detail || `Upload failed (${res.status})`);
+      if (!data.directory) throw new Error("附件目录上传成功但未返回目录路径");
+      return data.directory;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
   const addFileBlocks = (files: File[]) => {
     const validFiles = files.filter((file) => {
       if (!isSupportedFile(file)) return false;
@@ -115,6 +159,23 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
     if (!files) return;
     const fileArray = Array.from(files);
     addFileBlocks(fileArray);
+    e.target.value = "";
+  };
+
+  const handleAttachmentDirectoryUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const validFiles = Array.from(files).filter((file) => {
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(`文件 ${file.name} 超过 100MB 限制`);
+        return false;
+      }
+      // An attachment directory may intentionally contain formats that the
+      // deterministic extractor/OCR does not understand yet. Keep those
+      // files so the backend can index them as unresolved metadata.
+      return true;
+    });
+    if (validFiles.length > 0) setAttachmentDirectoryFiles(validFiles);
     e.target.value = "";
   };
 
@@ -176,7 +237,10 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
     setContentBlocks((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const resetBlocks = () => setContentBlocks([]);
+  const resetBlocks = () => {
+    setContentBlocks([]);
+    setAttachmentDirectoryFiles([]);
+  };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
     const items = e.clipboardData.items;
@@ -204,5 +268,8 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
     dragOver,
     handlePaste,
     uploadFiles,
+    attachmentDirectoryFiles,
+    handleAttachmentDirectoryUpload,
+    uploadAttachmentDirectory,
   };
 }

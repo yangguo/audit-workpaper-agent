@@ -48,7 +48,7 @@ npm run build
   - `POST /cancel/{run_id}` — cancel a running task
   - `POST /node_run/{node_id}` — run a single graph node
   - `POST /v1/chat/completions` — OpenAI-compatible chat API (non-stream returns `task_id`; poll `GET /v1/chat/completions/result/{task_id}`; completed result carries `review_id` when the agent ran `review_workpaper`)
-  - `POST /upload` — file upload (max 10 files, 100MB each)
+  - `POST /upload` — regular file upload (max 10 files, 100MB each) or directory-bundle upload (`upload_mode=attachments_dir`, max 500 files/1GB total, relative paths preserved)
   - `GET /findings/{review_id}` — structured review findings (written by `review_workpaper` to a side store)
   - `GET /health`, `GET /graph_parameter`
 
@@ -56,9 +56,9 @@ npm run build
 
 - **`src/tools/`** — Two LangChain tools registered on the agent:
   - `analyze_worksheet(file_path)` — Opens an Excel workbook, auto-detects "标准审计程序" (standard) and "执行程序" (execution) columns by scanning header rows, extracts audit program rows. Used to preview structure before a full review.
-  - `review_workpaper(file_path, checkpoints_path?, attachments_preview_path?, sheets?)` — Async. **Starts** the full deterministic review pipeline (ported from `wpreview/analyze_excel.py`) as a **background task** via `src/review/runner.py` and returns immediately with `{review_id, status:"running", status_url, findings_url}`. The review runs detached (large workpapers take tens of minutes); the frontend polls `GET /review/{review_id}/status` until `completed`, then fetches `GET /findings/{review_id}`. Starting a new review cancels any in-flight one (no stacking). The agent narrates "审阅已启动" from the running status; structured `Finding`s are written to a JSON side store (`assets/results/<review_id>_findings.json`) by the background task.
+  - `review_workpaper(file_path, checkpoints_path?, attachments_dir?, sheets?)` — Async. **Starts** the full deterministic review pipeline (ported from `wpreview/analyze_excel.py`) as a **background task** via `src/review/runner.py` and returns immediately with `{review_id, status:"running", status_url, findings_url}`. `attachments_dir` is a recursively searchable directory of real evidence files; matched text-bearing files are included in the evidence/checkpoint LLM context. The review runs detached (large workpapers take tens of minutes); the frontend polls `GET /review/{review_id}/status` until `completed`, then fetches `GET /findings/{review_id}`. Starting a new review cancels any in-flight one (no stacking). The agent narrates "审阅已启动" from the running status; structured `Finding`s are written to a JSON side store (`assets/results/<review_id>_findings.json`) by the background task.
 
-- **`src/review/`** — Review engine ported from `analyze_excel.py` (async over `ChatOpenAI`, no `jsonschema`): `models` (Finding + schema), `excel_utils`, `validation` (schema validate/repair + excerpt verification), `llm` (retry/backoff/stats), `hallucination` (cross-validation + adversarial challenge), `checkpoints` (loader + checkpoint LLM review), `attachments` (preview loader + ref matching), `evidence_steps` (evidence↔step LLM check), `procedure_pairs` (rule checks + A-C LLM judgement), `findings_review` (LLM re-review of rule findings), `pipeline` (`run_review` orchestrator), `runner` (background task + in-process registry). Tests under `tests/review/`.
+- **`src/review/`** — Review engine ported from `analyze_excel.py` (async over `ChatOpenAI`, no `jsonschema`): `models` (Finding + schema), `excel_utils`, `validation` (schema validate/repair + excerpt verification), `llm` (retry/backoff/stats), `hallucination` (cross-validation + adversarial challenge), `checkpoints` (loader + checkpoint LLM review), `attachments` (directory index, text extraction, and ref matching), `evidence_steps` (evidence↔step LLM check), `procedure_pairs` (rule checks + A-C LLM judgement), `findings_review` (LLM re-review of rule findings), `pipeline` (`run_review` orchestrator), `runner` (background task + in-process registry). Tests under `tests/review/`.
 
 - **`src/storage/findings_store.py`** — Side store: `save_findings`/`load_findings` to `${WORKSPACE_PATH}/assets/results/<review_id>_findings.json`.
 
@@ -73,7 +73,7 @@ npm run build
 
 - Next.js 15 App Router + React 19 + Tailwind CSS 4 + shadcn/ui (Radix primitives)
 - **`app/page.tsx`** — Root page, wraps `Thread` component in `StreamProvider`
-- **`app/api/upload/route.ts`** — Upload proxy that forwards to the backend `/upload`, with size/number validation
+- **`app/api/upload/route.ts`** — Upload proxy that forwards regular files or a directory bundle to the backend `/upload`, with size/number validation
 - **`components/thread/`** — Chat thread UI (AI messages, human messages, markdown rendering, file previews)
 - **`providers/Stream.tsx`** — Streaming context provider for SSE
 
@@ -95,9 +95,20 @@ npm run build
 | `AGENT_LLM_MAX_TOKENS` | Agent LLM max tokens (default: `10000`) |
 | `AGENT_LLM_TIMEOUT` | Agent LLM timeout in seconds (default: `600`) |
 | `REVIEW_LLM_MODEL` | Review engine LLM model (default: `doubao-seed-1-6-251015`) |
+| `REVIEW_EVIDENCE_AGENT_MODE` | Constrained evidence Agent mode: `off`, `fallback` (default), or `always` |
+| `REVIEW_EVIDENCE_AGENT_MAX_STEPS` | Maximum tool/agent recursion budget per Sheet (default: `8`) |
+| `MINERU_OCR_MODE` | OCR mode: `off` (default), `auto`, `lightweight`, or `precise`; remote OCR is opt-in |
+| `MINERU_TOKEN` | MinerU precise API token, required by `precise` and preferred by `auto` |
+| `MINERU_MODEL_VERSION` | MinerU precise model, default `vlm` |
+| `MINERU_OCR_LANGUAGE` | OCR language, default `ch` |
+| `MINERU_OCR_MAX_WAIT_SECONDS` | Maximum wait per OCR task, default `300` seconds |
+| `MINERU_OCR_POLL_INTERVAL_SECONDS` | OCR poll interval, default `2` seconds |
+| `MINERU_OCR_MAX_TEXT_CHARS` | Maximum OCR text added to evidence context per attachment, default `12000` |
 | `PGDATABASE_URL` | PostgreSQL connection string (optional) |
 | `FRONTEND_ORIGINS` | CORS origins for frontend (default: `http://localhost:3000`) |
 
 ## File Upload Path Convention
 
-Uploaded files land at `${WORKSPACE_PATH}/assets/uploads/<uuid>_<name>`. The API returns relative paths starting from `assets/`. Agent tools resolve relative paths against `WORKSPACE_PATH`.
+Uploaded files land at `${WORKSPACE_PATH}/assets/uploads/<uuid>_<name>`. Attachment directories land at `${WORKSPACE_PATH}/assets/uploads/attachments/<batch-id>/` with relative paths preserved. The API returns relative paths starting from `assets/`; agent tools resolve relative paths against `WORKSPACE_PATH`.
+
+The review pipeline uses a constrained evidence-discovery Agent only when deterministic attachment matching finds a gap, an attachment is unparsed/unsupported, or the review is configured with `REVIEW_EVIDENCE_AGENT_MODE=always`. Its tools are backed by the pinned attachment index and cannot execute shell commands, write files, or access paths outside the review snapshot. When `MINERU_OCR_MODE` is enabled, the Agent may call `ocr_attachment` for an indexed image/scan; the signed URLs stay inside the client, and OCR evidence is accepted only when its relative path and excerpt match the cached source text. The run statistics retain accepted sources, unresolved requests, tool traces, and aggregate OCR counts.

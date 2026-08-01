@@ -5,6 +5,7 @@ Ported from analyze_excel.py's generate_report review core (no xlsx/txt renderin
 import dataclasses
 import json
 import logging
+import os
 from typing import Dict, List, Optional, Tuple
 
 import openpyxl
@@ -12,6 +13,7 @@ import openpyxl
 from review.attachments import _check_attachment_references
 from review.checkpoints import _llm_check_sheet_by_checkpoints
 from review.evidence_steps import _llm_check_evidence_vs_steps
+from review.evidence_agent import investigate_sheet
 from review.excel_utils import _detect_layout, _normalize_sheet_id
 from review.findings_review import _llm_review_findings
 from review.hallucination import (
@@ -75,13 +77,15 @@ async def run_review(
     *,
     wb: openpyxl.Workbook,
     checkpoints: Optional[Dict[str, List[str]]] = None,
-    attachments_preview: Optional[Dict[str, object]] = None,
+    attachments: Optional[Dict[str, object]] = None,
     sheets: Optional[str] = None,
     llm,
+    attachments_preview: Optional[Dict[str, object]] = None,
 ) -> Tuple[List[dict], dict]:
     """Run the full review pipeline. Returns (findings_dicts, stats)."""
     checkpoints = checkpoints or {}
-    attachments_preview = attachments_preview or {}
+    attachments = attachments if attachments is not None else attachments_preview
+    attachments = attachments or {}
     filtered = _parse_sheet_filter(sheets)
     warning = ""
     if filtered is None:
@@ -122,37 +126,74 @@ async def run_review(
                 warning = f"部分指定 Sheet 未匹配：{', '.join(unmatched)}；已审阅：{', '.join(resolved)}。"
     _logger.info(
         "run_review start: sheets_arg=%r target=%r wb_sheets=%r "
-        "checkpoints_keys=%r preview_items=%r warning=%r",
+        "checkpoints_keys=%r attachment_items=%r warning=%r",
         sheets, target, list(wb.sheetnames),
-        list(checkpoints.keys()), len(attachments_preview.get("items", []) if attachments_preview else []),
+        list(checkpoints.keys()), len(attachments.get("items", []) if attachments else []),
         warning,
     )
 
     findings: List[Finding] = []
+    agent_stats = {
+        "mode": str(os.environ.get("REVIEW_EVIDENCE_AGENT_MODE", "fallback")),
+        "runs": 0,
+        "tool_calls": 0,
+        "accepted_evidence": 0,
+        "unresolved": 0,
+        "errors": 0,
+        "ocr": {"calls": 0, "success": 0, "errors": 0, "timeouts": 0},
+        "details": [],
+    }
     for sheet in target:
         if sheet not in wb.sheetnames:
             _logger.info("  sheet=%r skipped (not in workbook)", sheet)
             continue
         ws = wb[sheet]
         _logger.info(
-            "  sheet=%r cp=%r preview=%r",
-            sheet, bool(checkpoints.get(sheet)), bool(attachments_preview),
+            "  sheet=%r cp=%r attachments=%r",
+            sheet, bool(checkpoints.get(sheet)), bool(attachments),
         )
+        agent_result = await investigate_sheet(ws=ws, attachments=attachments, llm=llm)
+        if agent_result.get("status") != "skipped":
+            agent_stats["runs"] += 1
+            agent_stats["tool_calls"] += int(agent_result.get("tool_calls", 0) or 0)
+            agent_stats["accepted_evidence"] += len(agent_result.get("evidence", []) or [])
+            agent_stats["unresolved"] += len(agent_result.get("unresolved", []) or [])
+            if agent_result.get("status") == "error":
+                agent_stats["errors"] += 1
+            ocr_result = agent_result.get("ocr") or {}
+            if isinstance(ocr_result, dict):
+                ocr_stats = agent_stats["ocr"]
+                for key in ("calls", "success", "errors", "timeouts"):
+                    ocr_stats[key] += int(ocr_result.get(key, 0) or 0)
+            evidence = agent_result.get("evidence", []) or []
+            agent_stats["details"].append({
+                "sheet": sheet,
+                "status": agent_result.get("status"),
+                "tool_calls": int(agent_result.get("tool_calls", 0) or 0),
+                "evidence": list(evidence),
+                "unresolved": list(agent_result.get("unresolved", []) or []),
+                "tool_trace": list(agent_result.get("tool_trace", []) or []),
+                "ocr": dict(ocr_result) if isinstance(ocr_result, dict) else {},
+            })
+            if evidence:
+                by_sheet = attachments.setdefault("agent_evidence_by_sheet", {})
+                if isinstance(by_sheet, dict):
+                    by_sheet[_normalize_sheet_id(sheet)] = list(evidence)
         # 1) checkpoint-based review
         if checkpoints.get(sheet):
             findings += await _llm_check_sheet_by_checkpoints(
                 llm=llm, ws_title=sheet, ws=ws,
                 checkpoints=checkpoints[sheet],
-                attachments_preview=attachments_preview or None,
+                attachments=attachments or None,
             )
         # 2) attachment-reference matching
-        if attachments_preview:
-            findings += _check_attachment_references(sheet, ws, attachments_preview)
+        if attachments:
+            findings += _check_attachment_references(sheet, ws, attachments)
         # 3) evidence <-> step consistency
-        if attachments_preview:
+        if attachments:
             findings += await _llm_check_evidence_vs_steps(
                 llm=llm, ws_title=sheet, ws=ws,
-                attachments_preview=attachments_preview,
+                attachments=attachments,
             )
         # 4) rule-based procedure-pair checks
         findings += _check_procedure_pairs(sheet, ws)
@@ -200,6 +241,7 @@ async def run_review(
         "by_status": _counts_by(out, "status"),
         "by_risk_type": _counts_by(out, "risk_type"),
         "llm_call_stats": {k: dict(v) for k, v in LLM_CALL_STATS.items()},
+        "evidence_agent": agent_stats,
         "warning": warning,
     }
     return out, stats

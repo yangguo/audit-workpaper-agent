@@ -80,11 +80,19 @@ class Finding:
 
 
 @dataclass(frozen=True)
-class AttachmentPreviewItem:
+class AttachmentFile:
     index: str
     rel_dir: str
     filename: str
     rel_path: str
     file_type: str
-    description: str
-    status: str
+    description: str = ""
+    status: str = ""
+    size: int = 0
+    extracted_text: str = ""
+    extraction_status: str = ""
+
+
+# Kept as an import-compatible alias for callers that only use the old data
+# shape. New review inputs are indexed from an attachment directory.
+AttachmentPreviewItem = AttachmentFile

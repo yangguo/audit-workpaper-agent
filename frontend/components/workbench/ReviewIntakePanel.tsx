@@ -4,10 +4,10 @@ import type { ChangeEvent, ClipboardEvent, FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus } from "lucide-react";
+import { FolderOpen, Plus } from "lucide-react";
 
 const ACCEPTED_FILE_TYPES =
-  ".zip,.tar,.tar.gz,.tgz,.tar.bz2,.7z,.rar,.xlsx,.xls,.csv,.pdf,.docx,.doc,.pptx,.ppt";
+  ".zip,.tar,.tar.gz,.tgz,.tar.bz2,.7z,.rar,.xlsx,.xls,.csv,.pdf,.docx,.doc,.pptx,.ppt,.txt,.json,.xml,.log,.md,.html,.htm,.png,.jpg,.jpeg";
 
 export function ReviewIntakePanel(props: {
   archiveUrl: string;
@@ -19,6 +19,8 @@ export function ReviewIntakePanel(props: {
   onToggleUrlInput: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onFileUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onAttachmentDirectoryUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  attachmentDirectoryFileCount: number;
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
   return (
@@ -83,6 +85,29 @@ export function ReviewIntakePanel(props: {
             onChange={props.onFileUpload}
             multiple
             accept={ACCEPTED_FILE_TYPES}
+            className="hidden"
+          />
+          <Label
+            htmlFor="attachment-directory-input"
+            className="flex cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs hover:bg-accent"
+          >
+            <FolderOpen className="size-4" />
+            <span>
+              {props.attachmentDirectoryFileCount > 0
+                ? `附件目录（${props.attachmentDirectoryFileCount} 个文件）`
+                : "上传附件目录"}
+            </span>
+          </Label>
+          <input
+            id="attachment-directory-input"
+            type="file"
+            multiple
+            aria-label="上传附件目录"
+            onChange={props.onAttachmentDirectoryUpload}
+            ref={(node) => {
+              node?.setAttribute("webkitdirectory", "");
+              node?.setAttribute("directory", "");
+            }}
             className="hidden"
           />
           <Button

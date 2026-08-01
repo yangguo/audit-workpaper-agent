@@ -1,9 +1,15 @@
-"""Attachment-preview loading and reference matching (ported from analyze_excel.py)."""
+"""Attachment-directory indexing, evidence extraction, and reference matching."""
 import re
+import shutil
+import subprocess
+import zipfile
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
+from xml.etree import ElementTree
 
 import openpyxl
+from chardet import detect
 
 from review.constants import CHECKPOINT_VOCAB
 from review.excel_utils import (
@@ -12,20 +18,223 @@ from review.excel_utils import (
     _normalize_sheet_id,
     _truncate,
 )
-from review.models import AttachmentPreviewItem, Finding
+from review.models import AttachmentFile, AttachmentPreviewItem, Finding
 
 ATTACHMENT_FILE_RE = re.compile(
-    r"([0-9A-Za-z_\-\.一-鿿]+?\.(?:png|jpg|jpeg|pdf|xlsx|xls|docx|doc))",
+    r"([0-9A-Za-z_\-\.一-鿿]+?\.(?:png|jpg|jpeg|jp2|webp|gif|bmp|pdf|xlsx|xls|docx|doc|pptx|ppt|txt|csv|json|xml|log|md|html|htm|zip|tar|7z|rar|eml|msg))",
     re.IGNORECASE,
 )
 ATTACHMENT_PATH_RE = re.compile(
-    r"([0-9A-Za-z_\-\.一-鿿]+(?:[\\/][0-9A-Za-z_\-\.一-鿿]+)+\.(?:png|jpg|jpeg|pdf|xlsx|xls|docx|doc))",
+    r"([0-9A-Za-z_\-\.一-鿿]+(?:[\\/][0-9A-Za-z_\-\.一-鿿]+)+\.(?:png|jpg|jpeg|jp2|webp|gif|bmp|pdf|xlsx|xls|docx|doc|pptx|ppt|txt|csv|json|xml|log|md|html|htm|zip|tar|7z|rar|eml|msg))",
     re.IGNORECASE,
 )
 ATTACHMENT_INDEX_RE = re.compile(r"(?:附件|证据|图片|截图|索引|目录索引)\s*([0-9]{1,3})")
 
 _SHEET_TAG_RE = re.compile(r"\b((?:SA|PM)[-_ ]?\d{1,2}[A-Za-z]?)\b", re.IGNORECASE)
 _SHEET_TAG_NODELIM_RE = re.compile(r"\b((?:SA|PM)\d{1,2}[A-Za-z]?)\b", re.IGNORECASE)
+
+_TEXT_EXTENSIONS = {".txt", ".csv", ".json", ".xml", ".log", ".md", ".html", ".htm"}
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".jp2", ".webp", ".gif", ".bmp"}
+_MAX_ATTACHMENT_FILES = 500
+_MAX_EXTRACTED_TEXT = 12000
+_IGNORED_ATTACHMENT_NAMES = {".DS_Store", "Thumbs.db"}
+
+
+def _normalize_rel_path(value: str) -> str:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw or raw.startswith("/"):
+        return ""
+    parts = [part for part in raw.split("/") if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        return ""
+    return "/".join(parts).lower()
+
+
+def _extract_indices(text: str) -> List[str]:
+    values: List[str] = []
+    for value in ATTACHMENT_INDEX_RE.findall(str(text or "")):
+        normalized = str(value).strip()
+        if normalized and normalized not in values:
+            values.append(normalized)
+    return values
+
+
+def _limit_text(text: str, limit: int = _MAX_EXTRACTED_TEXT) -> str:
+    normalized = str(text or "").replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    return normalized[:limit]
+
+
+def _read_text_file(path: Path) -> Tuple[str, str]:
+    raw = path.read_bytes()
+    encoding = "utf-8"
+    try:
+        guessed = detect(raw).get("encoding")
+        if guessed:
+            encoding = str(guessed)
+    except Exception:
+        pass
+    return _limit_text(raw.decode(encoding, errors="replace")), "ok"
+
+
+def _read_xlsx_file(path: Path) -> Tuple[str, str]:
+    workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    lines: List[str] = []
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.value is None or str(cell.value).strip() == "":
+                    continue
+                lines.append(f"{worksheet.title}!{cell.coordinate}: {cell.value}")
+                if sum(len(line) + 1 for line in lines) >= _MAX_EXTRACTED_TEXT:
+                    return _limit_text("\n".join(lines)), "ok"
+    return _limit_text("\n".join(lines)), "ok"
+
+
+def _read_docx_file(path: Path) -> Tuple[str, str]:
+    with zipfile.ZipFile(path) as archive:
+        xml = archive.read("word/document.xml")
+    root = ElementTree.fromstring(xml)
+    text = "\n".join(
+        value.strip()
+        for node in root.iter()
+        for value in [node.text or ""]
+        if value.strip()
+    )
+    return _limit_text(text), "ok"
+
+
+def _read_pptx_file(path: Path) -> Tuple[str, str]:
+    from pptx import Presentation
+
+    presentation = Presentation(str(path))
+    lines: List[str] = []
+    for slide_number, slide in enumerate(presentation.slides, start=1):
+        for shape in slide.shapes:
+            value = getattr(shape, "text", "")
+            if value and value.strip():
+                lines.append(f"Slide {slide_number}: {value.strip()}")
+    return _limit_text("\n".join(lines)), "ok"
+
+
+def _read_pdf_file(path: Path) -> Tuple[str, str]:
+    # pypdf is optional so the core project can still index directories when
+    # the deployment image has only the standard document dependencies.
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        text = _limit_text("\n".join(page.extract_text() or "" for page in reader.pages))
+        return text, "ok" if text else "binary"
+    except ImportError:
+        pdftotext = shutil.which("pdftotext")
+        if not pdftotext:
+            return "", "unavailable"
+        result = subprocess.run(
+            [pdftotext, "-layout", str(path), "-"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            return "", "unavailable"
+        text = _limit_text(result.stdout)
+        return text, "ok" if text else "binary"
+    except Exception:
+        return "", "unavailable"
+
+
+def _extract_attachment_text(path: Path) -> Tuple[str, str]:
+    suffix = path.suffix.lower()
+    try:
+        if suffix in _TEXT_EXTENSIONS:
+            return _read_text_file(path)
+        if suffix == ".xlsx":
+            return _read_xlsx_file(path)
+        if suffix == ".docx":
+            return _read_docx_file(path)
+        if suffix == ".pptx":
+            return _read_pptx_file(path)
+        if suffix == ".pdf":
+            return _read_pdf_file(path)
+        if suffix in _IMAGE_EXTENSIONS:
+            return "", "binary"
+    except Exception:
+        return "", "unavailable"
+    return "", "unsupported"
+
+
+def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
+    """Recursively index an attachment directory and extract bounded text.
+
+    The returned maps are intentionally plain dictionaries so the index can be
+    passed through the existing review pipeline without introducing a storage
+    dependency. Unsupported regular files are retained as metadata with an
+    ``unsupported`` extraction status so the constrained Agent can report them
+    without guessing their contents.
+    """
+    if not attachments_dir:
+        return {}
+    root = Path(attachments_dir).expanduser()
+    if not root.is_dir():
+        return {}
+
+    paths = [
+        path for path in root.rglob("*")
+        if path.is_file()
+        and not path.is_symlink()
+        and path.name not in _IGNORED_ATTACHMENT_NAMES
+        and not path.name.startswith("~$")
+    ]
+    paths.sort(key=lambda path: path.relative_to(root).as_posix().lower())
+    paths = paths[:_MAX_ATTACHMENT_FILES]
+
+    items: List[AttachmentFile] = []
+    by_filename: Dict[str, List[AttachmentFile]] = defaultdict(list)
+    by_rel_path: Dict[str, List[AttachmentFile]] = defaultdict(list)
+    by_index: Dict[str, List[AttachmentFile]] = defaultdict(list)
+    by_sheet_norm: Dict[str, List[AttachmentFile]] = defaultdict(list)
+    status_counts: Dict[str, int] = defaultdict(int)
+
+    for path in paths:
+        relative_path = path.relative_to(root).as_posix()
+        extracted_text, extraction_status = _extract_attachment_text(path)
+        item = AttachmentFile(
+            index=(_extract_indices(relative_path) or [""])[0],
+            rel_dir=path.relative_to(root).parent.as_posix() if path.parent != root else "",
+            filename=path.name,
+            rel_path=relative_path,
+            file_type=path.suffix.lower().lstrip("."),
+            description=_limit_text(extracted_text, 400),
+            status=extraction_status,
+            size=path.stat().st_size,
+            extracted_text=extracted_text,
+            extraction_status=extraction_status,
+        )
+        items.append(item)
+        by_filename[item.filename.lower()].append(item)
+        normalized_path = _normalize_rel_path(item.rel_path)
+        path_parts = normalized_path.split("/")
+        for start in range(len(path_parts)):
+            suffix = "/".join(path_parts[start:])
+            if item not in by_rel_path[suffix]:
+                by_rel_path[suffix].append(item)
+        for index in _extract_indices(relative_path):
+            by_index[index].append(item)
+        for sheet_norm in _extract_sheet_norms(item.rel_dir, item.rel_path):
+            by_sheet_norm[sheet_norm].append(item)
+        status_counts[extraction_status] += 1
+
+    return {
+        "path": str(root),
+        "source_type": "directory",
+        "items": items,
+        "by_filename": dict(by_filename),
+        "by_rel_path": dict(by_rel_path),
+        "by_index": dict(by_index),
+        "by_sheet_norm": dict(by_sheet_norm),
+        "status_counts": dict(status_counts),
+    }
 
 
 def _extract_attachment_refs(text: str) -> Tuple[List[str], List[str], List[str]]:
@@ -164,6 +373,7 @@ def load_attachments_preview_xlsx(preview_path: str) -> Dict[str, object]:
 
     return {
         "path": preview_path,
+        "source_type": "preview",
         "items": items,
         "by_filename": dict(by_filename),
         "by_rel_path": dict(by_rel_path),
@@ -173,24 +383,24 @@ def load_attachments_preview_xlsx(preview_path: str) -> Dict[str, object]:
     }
 
 
-def _match_preview_items(
-    preview: Dict[str, object],
+def _match_attachment_items(
+    attachments: Dict[str, object],
     *,
     filenames: Sequence[str],
     rel_paths: Sequence[str],
     indices: Sequence[str],
-) -> Tuple[List[AttachmentPreviewItem], List[str]]:
-    if not preview:
-        return [], list(filenames)
-    by_filename = preview.get("by_filename") or {}
-    by_rel_path = preview.get("by_rel_path") or {}
-    by_index = preview.get("by_index") or {}
+) -> Tuple[List[AttachmentFile], List[str]]:
+    if not attachments:
+        return [], list(indices) + list(rel_paths) + list(filenames)
+    by_filename = attachments.get("by_filename") or {}
+    by_rel_path = attachments.get("by_rel_path") or {}
+    by_index = attachments.get("by_index") or {}
 
-    picked: List[AttachmentPreviewItem] = []
+    picked: List[AttachmentFile] = []
     picked_keys = set()
     missing: List[str] = []
 
-    def _add(items: Iterable[AttachmentPreviewItem]) -> None:
+    def _add(items: Iterable[AttachmentFile]) -> None:
         for it in items:
             key = (it.rel_path or "").lower() or (it.filename or "").lower()
             if not key:
@@ -208,8 +418,10 @@ def _match_preview_items(
             missing.append(f"索引{idx}")
 
     for p in rel_paths:
-        key = str(p).strip().lower().replace("/", "\\")
+        key = _normalize_rel_path(str(p))
         lst = by_rel_path.get(key)
+        if not lst:
+            lst = by_rel_path.get(key.replace("/", "\\"))
         if isinstance(lst, list) and lst:
             _add(lst)
             continue
@@ -226,13 +438,99 @@ def _match_preview_items(
     return picked, missing
 
 
-def _attachments_context_for_sheet(ws, preview: Dict[str, object], limit_chars: int = 6000) -> str:
-    if not preview:
+def _match_preview_items(
+    preview: Dict[str, object],
+    *,
+    filenames: Sequence[str],
+    rel_paths: Sequence[str],
+    indices: Sequence[str],
+) -> Tuple[List[AttachmentFile], List[str]]:
+    """Backward-compatible alias for older callers and preview fixtures."""
+    return _match_attachment_items(
+        preview,
+        filenames=filenames,
+        rel_paths=rel_paths,
+        indices=indices,
+    )
+
+
+def _verified_attachment_text(attachments: Dict[str, object], item: AttachmentFile) -> str:
+    """Return deterministic or cached OCR text for one indexed attachment."""
+    extracted = str(getattr(item, "extracted_text", "") or "")
+    if extracted:
+        return extracted
+    key = _normalize_rel_path(str(item.rel_path or item.filename or ""))
+    ocr_cache = attachments.get("ocr_by_path") or {}
+    cached = ocr_cache.get(key) if isinstance(ocr_cache, dict) else None
+    if isinstance(cached, dict) and str(cached.get("status", "")).lower() == "ok":
+        return str(cached.get("content", "") or "")
+    return ""
+
+
+def _verify_attachment_evidence_refs(
+    evidence_refs: Sequence[dict],
+    attachments: Dict[str, object],
+    ws=None,
+) -> List[dict]:
+    """Keep attachment references only when their source path and excerpt verify.
+
+    Cell evidence is retained when an LLM added an invalid attachment hint, but
+    the unverified attachment field is removed. This prevents a hallucinated
+    file path from surviving into a structured Finding while preserving a valid
+    workbook-cell citation.
+    """
+    if not attachments:
+        return list(evidence_refs)
+    from review.excel_utils import _get_cell_value
+    from review.validation import _verify_evidence_refs
+
+    verified: List[dict] = []
+    for raw in evidence_refs:
+        if not isinstance(raw, dict):
+            continue
+        attachment = str(raw.get("attachment", "") or "").strip()
+        if not attachment:
+            verified.append(dict(raw))
+            continue
+        filenames, rel_paths, indices = _extract_attachment_refs(attachment)
+        if not filenames and not rel_paths and not indices:
+            rel_paths = [attachment]
+        matched, _ = _match_attachment_items(
+            attachments,
+            filenames=filenames,
+            rel_paths=rel_paths,
+            indices=indices,
+        )
+        excerpt = str(raw.get("excerpt", "") or "").strip()
+        source_matches = any(
+            excerpt and excerpt in _verified_attachment_text(attachments, item)
+            for item in matched
+        )
+        if not matched or (excerpt and not source_matches):
+            fallback = dict(raw)
+            fallback.pop("attachment", None)
+            if fallback.get("cell_or_range"):
+                if ws is None:
+                    verified.append(fallback)
+                else:
+                    verified.extend(_verify_evidence_refs([fallback], ws))
+            continue
+        cell = str(raw.get("cell_or_range", "") or "").strip()
+        if ws is not None and cell and not _get_cell_value(ws, cell):
+            continue
+        normalized = dict(raw)
+        normalized["attachment"] = str(matched[0].rel_path or matched[0].filename or attachment)
+        verified.append(normalized)
+    return verified
+
+
+def _attachments_context_for_sheet(ws, attachments: Dict[str, object], limit_chars: int = 12000) -> str:
+    if not attachments:
         return ""
     text = _build_sheet_text_for_llm(ws, max_cells=260, max_chars=24000)
     filenames, rel_paths, indices = _extract_attachment_refs(text)
-    matched, _ = _match_preview_items(preview, filenames=filenames, rel_paths=rel_paths, indices=indices)
-    by_sheet = preview.get("by_sheet_norm") or {}
+    matched, _ = _match_attachment_items(attachments, filenames=filenames, rel_paths=rel_paths, indices=indices)
+    by_sheet = attachments.get("by_sheet_norm") or {}
     if isinstance(by_sheet, dict):
         norm = _normalize_sheet_id(getattr(ws, "title", "") or "")
         lst = by_sheet.get(norm)
@@ -247,12 +545,46 @@ def _attachments_context_for_sheet(ws, preview: Dict[str, object], limit_chars: 
                 seen.add(id(it))
                 if len(matched) >= 80:
                     break
-    if not matched:
+    agent_by_sheet = attachments.get("agent_evidence_by_sheet") or {}
+    agent_evidence = []
+    if isinstance(agent_by_sheet, dict):
+        candidate = agent_by_sheet.get(_normalize_sheet_id(getattr(ws, "title", "") or ""))
+        if isinstance(candidate, list):
+            agent_evidence = [item for item in candidate if isinstance(item, dict)]
+    if not matched and not agent_evidence:
         return ""
     parts: List[str] = []
     total = 0
+    for evidence in agent_evidence[:20]:
+        path = str(evidence.get("path", "") or "")
+        excerpt = str(evidence.get("excerpt", "") or "")
+        if not path or not excerpt:
+            continue
+        line = (
+            f"- Agent调查证据 | {path} | 类型={evidence.get('file_type', '')} | "
+            f"解析状态={evidence.get('extraction_status', 'unknown')}"
+            f"\n  原文摘录：{_truncate(excerpt, 1800)}"
+        )
+        supports = str(evidence.get("supports", "") or "").strip()
+        if supports:
+            line += f"\n  调查用途：{_truncate(supports, 300)}"
+        if total + len(line) + 1 > limit_chars:
+            break
+        parts.append(line)
+        total += len(line) + 1
     for it in matched[:40]:
-        line = f"- {it.rel_path or it.filename} | 状态={it.status or ''} | {it.description or ''}"
+        verified_text = _verified_attachment_text(attachments, it)
+        display_status = it.extraction_status or it.status or "unknown"
+        if verified_text and str(display_status).lower() not in {"ok", "ocr"}:
+            display_status = "ocr"
+        line = (
+            f"- {it.rel_path or it.filename} | 类型={it.file_type} | 大小={it.size} | "
+            f"解析状态={display_status}"
+        )
+        if verified_text:
+            line += f"\n  内容：{_truncate(verified_text, 1800)}"
+        elif it.description:
+            line += f"\n  描述：{it.description}"
         if total + len(line) + 1 > limit_chars:
             break
         parts.append(line)
@@ -260,8 +592,8 @@ def _attachments_context_for_sheet(ws, preview: Dict[str, object], limit_chars: 
     return "\n".join(parts).strip()
 
 
-def _check_attachment_references(ws_title: str, ws, attachments_preview: Dict[str, object]) -> List[Finding]:
-    if not attachments_preview:
+def _check_attachment_references(ws_title: str, ws, attachments: Dict[str, object]) -> List[Finding]:
+    if not attachments:
         return []
     findings: List[Finding] = []
 
@@ -271,8 +603,8 @@ def _check_attachment_references(ws_title: str, ws, attachments_preview: Dict[st
         if not filenames and not rel_paths and not indices:
             continue
         used_any = True
-        matched, missing = _match_preview_items(
-            attachments_preview,
+        matched, missing = _match_attachment_items(
+            attachments,
             filenames=filenames,
             rel_paths=rel_paths,
             indices=indices,
@@ -280,7 +612,7 @@ def _check_attachment_references(ws_title: str, ws, attachments_preview: Dict[st
         if missing:
             findings.append(
                 Finding(
-                    issue_type="附件证据引用未匹配到预览清单",
+                    issue_type="附件证据引用未匹配到附件目录",
                     severity="P2",
                     sheet=ws_title,
                     cell=coord,
@@ -288,26 +620,32 @@ def _check_attachment_references(ws_title: str, ws, attachments_preview: Dict[st
                     basis=_truncate(
                         "引用: "
                         + "、".join(sorted({m for m in missing if m}))
-                        + f"\n预览清单: {attachments_preview.get('path','')}",
+                        + f"\n附件目录: {attachments.get('path','')}",
                         1200,
                     ),
-                    suggestion="核对底稿中的附件编号/文件名/路径是否与附件清单一致；如存在重命名或遗漏，请补齐清单或更新引用。",
+                    suggestion="核对底稿中的附件编号/文件名/路径是否与附件目录一致；如存在重命名或遗漏，请补齐目录或更新引用。",
                 )
             )
-        bad = [it for it in matched if (it.status or "").strip() and str(it.status).strip().upper() != "OK"]
+        bad = [
+            it for it in matched
+            if (it.extraction_status or it.status) not in {"", "ok", "OK"}
+            and not _verified_attachment_text(attachments, it)
+        ]
         for it in bad[:5]:
             findings.append(
                 Finding(
-                    issue_type="附件预览状态异常",
+                    issue_type="附件证据内容未解析",
                     severity="P1",
                     sheet=ws_title,
                     cell=coord,
                     snippet=_truncate(text, 220),
                     basis=_truncate(
-                        f"附件: {it.rel_path or it.filename}\n状态: {it.status}\n描述: {it.description}",
+                        f"附件: {it.rel_path or it.filename}\n"
+                        f"解析状态: {it.extraction_status or it.status}\n"
+                        f"类型: {it.file_type}",
                         1200,
                     ),
-                    suggestion="检查该附件是否OCR/解析失败或内容不清晰；必要时补充可复核版本（导出清单/日志/原始报表）并在底稿中明确指向。",
+                    suggestion="检查该附件是否为图片、扫描件或不支持的格式；必要时补充可检索版本，或配置 OCR/视觉模型后重新审阅。",
                 )
             )
 

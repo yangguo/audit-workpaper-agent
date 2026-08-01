@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 SCHEMA_VERSION = "2.0"
 
-InputRole = Literal["workpaper", "checkpoints", "attachments_preview"]
+InputRole = Literal["workpaper", "checkpoints", "attachments_dir", "attachments_preview"]
 CaptureStatus = Literal["complete", "truncated"]
 ArtifactStatus = Literal["running", "completed", "error"]
 

@@ -26,16 +26,52 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_path(path: str | Path) -> str:
+    """Hash a file or directory with names and bytes in deterministic order."""
+    source = Path(path)
+    if source.is_file():
+        return sha256_file(source)
+    if not source.is_dir():
+        raise FileNotFoundError(str(source))
+
+    digest = hashlib.sha256()
+    for child in sorted(source.rglob("*"), key=lambda p: p.relative_to(source).as_posix()):
+        if not child.is_file() or child.is_symlink():
+            continue
+        relative = child.relative_to(source).as_posix().encode("utf-8")
+        digest.update(relative)
+        digest.update(b"\0")
+        with child.open("rb") as handle:
+            while chunk := handle.read(_HASH_CHUNK_SIZE):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _path_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    return sum(
+        child.stat().st_size
+        for child in path.rglob("*")
+        if child.is_file() and not child.is_symlink()
+    )
+
+
 def _input_file(role: str, path: str) -> InputFile:
     source = Path(path)
-    if not source.is_file():
+    if not source.exists() or source.is_symlink():
         raise FileNotFoundError(str(source))
     return InputFile(
         role=role,  # type: ignore[arg-type]
         path=str(source),
         filename=source.name,
-        sha256=sha256_file(source),
-        size=source.stat().st_size,
+        sha256=sha256_path(source),
+        size=_path_size(source),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if source.is_file()
+            else "inode/directory"
+        ),
     )
 
 
@@ -43,12 +79,15 @@ def build_input_files(
     *,
     workpaper_path: str,
     checkpoints_path: str = "",
+    attachments_dir: str = "",
     attachments_preview_path: str = "",
 ) -> list[InputFile]:
     """Build ordered, content-addressed records for review input files."""
     inputs = [_input_file("workpaper", workpaper_path)]
     if checkpoints_path:
         inputs.append(_input_file("checkpoints", checkpoints_path))
+    if attachments_dir:
+        inputs.append(_input_file("attachments_dir", attachments_dir))
     if attachments_preview_path:
         inputs.append(_input_file("attachments_preview", attachments_preview_path))
     return inputs

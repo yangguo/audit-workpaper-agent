@@ -2,15 +2,19 @@
 import asyncio
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from openpyxl.utils import get_column_letter
 
-from review.attachments import _extract_attachment_refs, _match_preview_items
+from review.attachments import (
+    _extract_attachment_refs,
+    _match_attachment_items,
+    _verify_attachment_evidence_refs,
+)
 from review.constants import EVIDENCE_KEYWORDS
 from review.excel_utils import _detect_layout, _get_cell_value, _normalize_sheet_id, _truncate
 from review.llm import _llm_request_json_list, _llm_stat
-from review.models import AttachmentPreviewItem, Finding, _SEVERITY_FROM_CHINESE
+from review.models import AttachmentFile, Finding, _SEVERITY_FROM_CHINESE
 from review.validation import _verify_evidence_refs
 
 _EXCERPT_MAX_LEN = 2000
@@ -21,11 +25,13 @@ async def _llm_check_evidence_vs_steps(
     llm,
     ws_title: str,
     ws,
-    attachments_preview: Dict[str, object],
+    attachments: Optional[Dict[str, object]] = None,
     batch_size: int = 6,
     sleep_seconds: float = 0.2,
+    attachments_preview: Optional[Dict[str, object]] = None,
 ) -> List[Finding]:
-    if not attachments_preview:
+    attachments = attachments if attachments is not None else attachments_preview
+    if not attachments:
         return []
     findings: List[Finding] = []
     header_row, standard_col, execution_cols = _detect_layout(ws)
@@ -48,8 +54,8 @@ async def _llm_check_evidence_vs_steps(
             filenames, rel_paths, indices = _extract_attachment_refs(c_text)
             if not filenames and not rel_paths and not indices and not any(k in c_text for k in EVIDENCE_KEYWORDS):
                 continue
-            matched, missing = _match_preview_items(
-                attachments_preview, filenames=filenames, rel_paths=rel_paths, indices=indices,
+            matched, missing = _match_attachment_items(
+                attachments, filenames=filenames, rel_paths=rel_paths, indices=indices,
             )
             if (
                 not matched
@@ -57,11 +63,17 @@ async def _llm_check_evidence_vs_steps(
                 and not rel_paths
                 and not indices
                 and any(k in c_text for k in EVIDENCE_KEYWORDS)
-                and isinstance(attachments_preview.get("by_sheet_norm"), dict)
+                and isinstance(attachments.get("by_sheet_norm"), dict)
             ):
-                pool = attachments_preview.get("by_sheet_norm", {}).get(_normalize_sheet_id(ws_title))
+                pool = attachments.get("by_sheet_norm", {}).get(_normalize_sheet_id(ws_title))
                 if isinstance(pool, list) and pool:
-                    matched = [it for it in pool if isinstance(it, AttachmentPreviewItem)][:10]
+                    matched = [it for it in pool if isinstance(it, AttachmentFile)][:10]
+            agent_evidence: List[Dict[str, object]] = []
+            agent_by_sheet = attachments.get("agent_evidence_by_sheet") or {}
+            if isinstance(agent_by_sheet, dict):
+                candidate = agent_by_sheet.get(_normalize_sheet_id(ws_title))
+                if isinstance(candidate, list):
+                    agent_evidence = [item for item in candidate if isinstance(item, dict)][:10]
             if missing and (filenames or rel_paths or indices):
                 findings.append(
                     Finding(
@@ -75,17 +87,38 @@ async def _llm_check_evidence_vs_steps(
                             + "\n引用未匹配: " + "、".join(sorted({m for m in missing if m})),
                             1200,
                         ),
-                        suggestion="核对附件编号/命名/路径与证据清单是否一致；必要时在底稿中给出可复核的相对路径或文件名，并补充证据来源说明。",
+                        suggestion="核对附件编号/命名/路径与附件目录是否一致；必要时在底稿中给出可复核的相对路径或文件名，并补充证据来源说明。",
                     )
                 )
-            if matched:
+            if matched or agent_evidence:
                 evidences: List[Dict[str, str]] = []
                 for it in matched[:10]:
                     evidences.append({
                         "path": str(it.rel_path or it.filename or ""),
-                        "status": str(it.status or ""),
-                        "description": _truncate(str(it.description or "").replace("\r\n", "\n").replace("\r", "\n"), 1200),
+                        "file_type": str(it.file_type or ""),
+                        "size": int(it.size or 0),
+                        "extraction_status": str(it.extraction_status or it.status or ""),
+                        "content": _truncate(
+                            str(it.extracted_text or it.description or "")
+                            .replace("\r\n", "\n").replace("\r", "\n"),
+                            3000,
+                        ),
                     })
+                for evidence in agent_evidence:
+                    path = str(evidence.get("path", "") or "")
+                    excerpt = str(evidence.get("excerpt", "") or "")
+                    if not path or not excerpt:
+                        continue
+                    evidences.append({
+                        "path": path,
+                        "file_type": str(evidence.get("file_type", "") or ""),
+                        "size": 0,
+                        "extraction_status": str(evidence.get("extraction_status", "ok") or "ok"),
+                        "content": _truncate(excerpt, 3000),
+                        "source": "evidence_agent",
+                    })
+                if not evidences:
+                    continue
                 cases.append({
                     "id": next_id,
                     "sheet": ws_title,
@@ -148,7 +181,7 @@ async def _llm_check_evidence_vs_steps(
 
     system_prompt = (
         "你是一名严格的IT审计/财务审计质量复核专家。\n"
-        "你将收到多条“标准审计程序/执行审计程序”记录，以及执行中引用的附件证据预览信息（附件路径/状态/内容描述）。\n"
+        "你将收到多条“标准审计程序/执行审计程序”记录，以及执行中引用的附件目录证据（实际文件路径/类型/解析状态/提取内容）。\n"
         "你的任务：判断证据是否与审计步骤匹配、是否足以支持执行描述与测试结论（如“已验证/无异常/符合”等）。\n"
         "重点关注：\n"
         "1) 证据是否能证明该步骤要验证的控制点/属性（而非无关截图）。\n"
@@ -160,7 +193,7 @@ async def _llm_check_evidence_vs_steps(
         "- status: \"pass\"/\"fail\"/\"unknown\" (无问题/有问题/不确定)\n"
         "- conclusion: 一句话结论\n"
         "- reasons: 字符串数组，2-5条要点\n"
-        "- evidence_refs: 数组，每个元素含 {sheet, cell_or_range, attachment(可选), excerpt(原文摘录)}。excerpt必须逐字来自执行/标准/附件描述。\n"
+        "- evidence_refs: 数组，每个元素含 {sheet, cell_or_range, attachment(可选), excerpt(原文摘录)}。没有attachment时excerpt必须逐字来自执行/标准文本；如果结论依赖附件目录/Agent调查证据，必须填写已提供的相对路径，并让excerpt逐字来自该附件提取文本。\n"
         "  * status=fail时必须至少1个evidence_ref；无法引用时status必须为unknown\n"
         "- severity: \"P0\"/\"P1\"/\"P2\"（当status!=pass时必填）\n"
         "- risk_type: \"覆盖性\"/\"一致性\"/\"证据不足\"/\"方法性\"/\"逻辑性\"/\"跨字段一致性\"之一\n"
@@ -248,7 +281,12 @@ async def _llm_check_evidence_vs_steps(
                         "cell_or_range": c_cell,
                         "excerpt": c_text[:_EXCERPT_MAX_LEN] if c_text else "",
                     })
-                evidence_refs_list = _verify_evidence_refs(evidence_refs_list, ws)
+                local_refs = [ref for ref in evidence_refs_list if not ref.get("attachment")]
+                attachment_refs = [ref for ref in evidence_refs_list if ref.get("attachment")]
+                evidence_refs_list = _verify_evidence_refs(local_refs, ws)
+                evidence_refs_list.extend(
+                    _verify_attachment_evidence_refs(attachment_refs, attachments or {}, ws=ws)
+                )
                 if status == "fail" and not evidence_refs_list:
                     status = "unknown"
                     unknown_reason = unknown_reason or "无法引用原始证据佐证该判定，降级为不确定"

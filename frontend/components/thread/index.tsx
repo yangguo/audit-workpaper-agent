@@ -29,6 +29,9 @@ export function Thread() {
     dragOver,
     handlePaste,
     uploadFiles,
+    attachmentDirectoryFiles,
+    handleAttachmentDirectoryUpload,
+    uploadAttachmentDirectory,
   } = useFileUpload();
 
   void _removeBlock;
@@ -62,7 +65,10 @@ export function Thread() {
     }
   }, [stream.error]);
 
-  const buildMessageText = (uploadedPaths: string[] = []): string => {
+  const buildMessageText = (
+    uploadedPaths: string[] = [],
+    attachmentsDirPath = "",
+  ): string => {
     const parts: string[] = [];
 
     if (archiveUrl.trim()) {
@@ -78,6 +84,10 @@ export function Thread() {
       const suffix = ["已上传文件路径：", ...uploadedPaths.map((p) => `- ${p}`)].join("\n");
       text = text ? `${text}\n${suffix}` : suffix;
     }
+    if (attachmentsDirPath) {
+      const suffix = `附件目录路径：\n- ${attachmentsDirPath}`;
+      text = text ? `${text}\n${suffix}` : suffix;
+    }
     return text;
   };
 
@@ -86,6 +96,7 @@ export function Thread() {
 
     // Upload files before building message
     let uploadedPaths: string[] = [];
+    let attachmentsDirPath = "";
     const filesToUpload = contentBlocks
       .filter((b) => b.file)
       .map((b) => b.file!);
@@ -110,7 +121,27 @@ export function Thread() {
       }
     }
 
-    const text = buildMessageText(uploadedPaths);
+    if (attachmentDirectoryFiles.length > 0) {
+      try {
+        attachmentsDirPath = await uploadAttachmentDirectory(attachmentDirectoryFiles);
+      } catch (error) {
+        console.error("Attachment directory upload failed:", error);
+        const message = error instanceof Error ? error.message : String(error);
+        const isConnectionError =
+          message.includes("Failed to fetch") || message.includes("NetworkError");
+        toast.error(
+          isConnectionError ? "无法连接后端服务" : "附件目录上传失败，请重试",
+          {
+            description: isConnectionError
+              ? "请确认后端已启动：python src/main.py -m http -p 5000"
+              : message,
+          },
+        );
+        return;
+      }
+    }
+
+    const text = buildMessageText(uploadedPaths, attachmentsDirPath);
     if ((!text.trim() && contentBlocks.length === 0) || isLoading) return;
 
     const msgContent: Array<{ type: string; text?: string; metadata?: { name: string } }> = [];
@@ -220,6 +251,8 @@ export function Thread() {
             onToggleUrlInput={() => setShowUrlInput((value) => !value)}
             onSubmit={handleSubmit}
             onFileUpload={handleFileUpload}
+            onAttachmentDirectoryUpload={handleAttachmentDirectoryUpload}
+            attachmentDirectoryFileCount={attachmentDirectoryFiles.length}
             onPaste={handlePaste}
           />
         }

@@ -41,6 +41,7 @@ export type UnderstoodRequirement = {
   sheets_raw: string;
   workpaper: string;
   checkpoints?: string | null;
+  attachments_dir?: string | null;
   attachments_preview?: string | null;
   summary: string;
 };

@@ -111,6 +111,7 @@ describe("buildWorkbenchViewModel", () => {
       sheets_raw: "pe6",
       workpaper: "C22 IT一般控制测试2025v5.xlsx",
       checkpoints: "检查要点.xlsx",
+      attachments_dir: "dir-1",
       attachments_preview: null,
       summary: "将审阅 PE-6（底稿：C22 IT一般控制测试2025v5.xlsx，含检查要点：检查要点.xlsx）",
     };

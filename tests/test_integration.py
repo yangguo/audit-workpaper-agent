@@ -126,3 +126,33 @@ async def test_review_workpaper_tool_missing_file_returns_error(monkeypatch, tmp
     result = json.loads(result_str)
     assert result["success"] is False
     assert "不存在" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_review_workpaper_tool_accepts_attachment_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    uploads = tmp_path / "assets" / "uploads"
+    uploads.mkdir(parents=True)
+    workpaper = uploads / "workpaper.xlsx"
+    openpyxl.Workbook().save(workpaper)
+    attachments_dir = uploads / "attachments" / "bundle-1"
+    attachments_dir.mkdir(parents=True)
+    (attachments_dir / "SA-4c" ).mkdir()
+    (attachments_dir / "SA-4c" / "evidence.txt").write_text("evidence", encoding="utf-8")
+
+    captured = {}
+
+    async def _start_review(**kwargs):
+        captured.update(kwargs)
+        return "review-dir-1"
+
+    monkeypatch.setattr(rwp, "start_review", _start_review)
+
+    result = json.loads(await rwp.review_workpaper.ainvoke({
+        "file_path": "assets/uploads/workpaper.xlsx",
+        "attachments_dir": "assets/uploads/attachments/bundle-1",
+    }))
+
+    assert result["success"] is True
+    assert result["review_id"] == "review-dir-1"
+    assert captured["attachments_dir"] == str(attachments_dir)

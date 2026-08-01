@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -101,12 +102,36 @@ class ReviewArtifactStore:
             raise
         return destination
 
+    @staticmethod
+    def _atomic_copytree(source: Path, destination: Path) -> Path:
+        if not source.is_dir() or source.is_symlink():
+            raise FileNotFoundError(str(source))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
+        try:
+            for child in source.rglob("*"):
+                if child.is_symlink():
+                    continue
+                relative = child.relative_to(source)
+                target = temporary / relative
+                if child.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                elif child.is_file():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(child, target)
+            os.replace(temporary, destination)
+        except Exception:
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise
+        return destination
+
     def snapshot_inputs(
         self,
         review_id: str,
         *,
         workpaper_path: str,
         checkpoints_path: str = "",
+        attachments_dir: str = "",
         attachments_preview_path: str = "",
     ) -> dict[str, str]:
         """Pin every supplied input once for both V1 and artifact capture."""
@@ -114,13 +139,17 @@ class ReviewArtifactStore:
         for role, raw_path in (
             ("workpaper", workpaper_path),
             ("checkpoints", checkpoints_path),
+            ("attachments_dir", attachments_dir),
             ("attachments_preview", attachments_preview_path),
         ):
             if not raw_path:
                 continue
             source = Path(raw_path)
             destination = self._artifact_dir(review_id) / "inputs" / role / source.name
-            snapshots[role] = str(self._atomic_copy(source, destination))
+            if role == "attachments_dir":
+                snapshots[role] = str(self._atomic_copytree(source, destination))
+            else:
+                snapshots[role] = str(self._atomic_copy(source, destination))
         return snapshots
 
     def _manifest_path(self, review_id: str) -> Path:

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import openpyxl
 
-from review.attachments import load_attachments_preview_xlsx
+from review.attachments import build_attachment_index, load_attachments_preview_xlsx
 from review.checkpoints import load_checkpoints_xlsx
 from review.contracts import ReviewManifest
 from review.evidence import build_evidence_graph, build_input_files
@@ -78,6 +78,7 @@ async def start_review(
     *,
     file_path: str,
     checkpoints_path: str = "",
+    attachments_dir: str = "",
     attachments_preview_path: str = "",
     sheets: Optional[str] = None,
     source: str = "",
@@ -92,6 +93,7 @@ async def start_review(
         review_id=review_id,
         file_path=file_path,
         checkpoints_path=checkpoints_path,
+        attachments_dir=attachments_dir,
         attachments_preview_path=attachments_preview_path,
         sheets=sheets,
         source=source,
@@ -111,6 +113,7 @@ async def _run_review(
     review_id: str,
     file_path: str,
     checkpoints_path: str,
+    attachments_dir: str,
     attachments_preview_path: str,
     sheets: Optional[str],
     source: str,
@@ -125,10 +128,12 @@ async def _run_review(
                 review_id,
                 workpaper_path=file_path,
                 checkpoints_path=checkpoints_path,
+                attachments_dir=attachments_dir,
                 attachments_preview_path=attachments_preview_path,
             )
             pinned_file_path = snapshot_paths["workpaper"]
             pinned_checkpoints_path = snapshot_paths.get("checkpoints", "")
+            pinned_attachments_dir = snapshot_paths.get("attachments_dir", "")
             pinned_attachments_path = snapshot_paths.get("attachments_preview", "")
         except Exception as e:
             snapshot_error = f"{type(e).__name__}: {e}"
@@ -139,6 +144,7 @@ async def _run_review(
                 entry["artifact_error"] = snapshot_error
             pinned_file_path = file_path
             pinned_checkpoints_path = checkpoints_path
+            pinned_attachments_dir = attachments_dir
             pinned_attachments_path = attachments_preview_path
 
         wb = openpyxl.load_workbook(pinned_file_path, data_only=True)
@@ -147,17 +153,23 @@ async def _run_review(
             if pinned_checkpoints_path
             else {}
         )
-        attachments_preview = (
-            load_attachments_preview_xlsx(pinned_attachments_path)
-            if pinned_attachments_path
-            else {}
-        )
+        if pinned_attachments_dir:
+            attachments = await asyncio.to_thread(
+                build_attachment_index, pinned_attachments_dir
+            )
+        elif pinned_attachments_path:
+            attachments = await asyncio.to_thread(
+                load_attachments_preview_xlsx, pinned_attachments_path
+            )
+        else:
+            attachments = {}
         LLM_CALL_STATS.clear()
         llm = get_review_llm()
         findings, stats = await run_review(
             wb=wb,
             checkpoints=checkpoints,
-            attachments_preview=attachments_preview,
+            attachments=attachments,
+            attachments_preview=attachments,
             sheets=sheets,
             llm=llm,
         )
@@ -173,6 +185,7 @@ async def _run_review(
                         review_id=review_id,
                         file_path=pinned_file_path,
                         checkpoints_path=pinned_checkpoints_path,
+                        attachments_dir=pinned_attachments_dir,
                         attachments_preview_path=pinned_attachments_path,
                         sheets=sheets,
                         source=source,
@@ -200,6 +213,7 @@ async def _capture_shadow_artifact(
     review_id: str,
     file_path: str,
     checkpoints_path: str,
+    attachments_dir: str = "",
     attachments_preview_path: str,
     sheets: Optional[str],
     source: str,
@@ -218,6 +232,7 @@ async def _capture_shadow_artifact(
             review_id=review_id,
             file_path=file_path,
             checkpoints_path=checkpoints_path,
+            attachments_dir=attachments_dir,
             attachments_preview_path=attachments_preview_path,
             sheets=sheets,
             source=source,
@@ -244,6 +259,7 @@ def _write_shadow_artifact(
     review_id: str,
     file_path: str,
     checkpoints_path: str,
+    attachments_dir: str = "",
     attachments_preview_path: str,
     sheets: Optional[str],
     source: str,
@@ -257,6 +273,7 @@ def _write_shadow_artifact(
         inputs = build_input_files(
             workpaper_path=file_path,
             checkpoints_path=checkpoints_path,
+            attachments_dir=attachments_dir,
             attachments_preview_path=attachments_preview_path,
         )
         manifest = ReviewManifest(

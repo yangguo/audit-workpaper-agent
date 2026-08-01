@@ -13,10 +13,11 @@ from review.models import AttachmentPreviewItem
 
 def test_extract_attachment_refs():
     filenames, rel_paths, indices = _extract_attachment_refs(
-        "见附件1，截图 screenshot.png，路径 dir/sub/file.xlsx"
+        "见附件1，截图 screenshot.png，路径 dir/sub/file.xlsx，压缩包 export.rar"
     )
     assert "screenshot.png" in filenames
     assert "dir/sub/file.xlsx" in rel_paths
+    assert "export.rar" in filenames
     assert "1" in indices
 
 
@@ -104,7 +105,7 @@ def test_check_attachment_references_flags_missing_index():
     ws["A1"] = "见附件9"
     findings = _check_attachment_references("SA-1", ws, preview)
     assert len(findings) == 1
-    assert findings[0].issue_type == "附件证据引用未匹配到预览清单"
+    assert findings[0].issue_type == "附件证据引用未匹配到附件目录"
     assert findings[0].severity == "P2"
 
 

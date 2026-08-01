@@ -24,6 +24,25 @@ class _FakeLLM:
         return _FakeRunnable(self.content)
 
 
+class _CapturingRunnable:
+    def __init__(self, content, captured):
+        self.content = content
+        self.captured = captured
+
+    async def ainvoke(self, messages):
+        self.captured.append(messages)
+        return AIMessage(content=self.content)
+
+
+class _CapturingLLM:
+    def __init__(self, content, captured):
+        self.content = content
+        self.captured = captured
+
+    def bind(self, **kwargs):
+        return _CapturingRunnable(self.content, self.captured)
+
+
 def _preview_with_item():
     item = AttachmentPreviewItem(
         index="1", rel_dir="d", filename="a.png", rel_path="d/a.png",
@@ -81,3 +100,31 @@ async def test_llm_check_evidence_vs_steps_empty_preview_returns_empty(monkeypat
         attachments_preview={}, batch_size=6, sleep_seconds=0,
     )
     assert findings == []
+
+
+@pytest.mark.asyncio
+async def test_llm_check_evidence_vs_steps_includes_agent_evidence(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    ws = _build_ws_with_evidence_ref()
+    captured = []
+    attachments = _preview_with_item()
+    attachments["agent_evidence_by_sheet"] = {
+        "SA1": [{
+            "path": "SA-1/users.txt",
+            "file_type": "txt",
+            "extraction_status": "ok",
+            "excerpt": "admin,administrator",
+            "supports": "用户清单中的管理员权限",
+            "confidence": "high",
+        }]
+    }
+
+    await _llm_check_evidence_vs_steps(
+        llm=_CapturingLLM('{"results": []}', captured),
+        ws_title="SA-1", ws=ws, attachments=attachments,
+        batch_size=6, sleep_seconds=0,
+    )
+
+    assert captured
+    assert "admin,administrator" in str(captured[0])
+    assert "SA-1/users.txt" in str(captured[0])

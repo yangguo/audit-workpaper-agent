@@ -94,6 +94,15 @@ docker run -d \
 | `AGENT_LLM_MAX_TOKENS` | 否 | Agent LLM 最大 token 数，默认 `10000` |
 | `AGENT_LLM_TIMEOUT` | 否 | Agent LLM 超时（秒），默认 `600` |
 | `REVIEW_LLM_MODEL` | 否 | 审阅引擎 LLM 模型，默认 `doubao-seed-1-6-251015` |
+| `REVIEW_EVIDENCE_AGENT_MODE` | 否 | 受限证据调查 Agent：`off`、`fallback`、`always`；默认 `fallback` |
+| `REVIEW_EVIDENCE_AGENT_MAX_STEPS` | 否 | 单个 Sheet 的证据调查最大 Agent 步数，默认 `8` |
+| `MINERU_OCR_MODE` | 否 | OCR 模式：`off`（默认）、`auto`、`lightweight`、`precise`；远程处理附件前需明确开启 |
+| `MINERU_TOKEN` | `precise/auto` 时 | MinerU 精确解析 API Token；`auto` 有 Token 时优先走精确 API |
+| `MINERU_MODEL_VERSION` | 否 | 精确 API 模型，默认 `vlm` |
+| `MINERU_OCR_LANGUAGE` | 否 | OCR 语言，默认 `ch` |
+| `MINERU_OCR_MAX_WAIT_SECONDS` | 否 | 单个 OCR 任务最长等待时间，默认 `300` 秒 |
+| `MINERU_OCR_POLL_INTERVAL_SECONDS` | 否 | OCR 轮询间隔，默认 `2` 秒 |
+| `MINERU_OCR_MAX_TEXT_CHARS` | 否 | 单个附件纳入证据上下文的 OCR 文本上限，默认 `12000` |
 | `S3_ENDPOINT_URL` | 否 | S3 兼容存储端点（启用对象存储时必填） |
 | `S3_BUCKET_NAME` | 否 | S3 桶名 |
 | `S3_STORAGE_TOKEN` | 否 | S3 代理签名 token |
@@ -111,8 +120,10 @@ docker run -d \
 - Method：`POST`
 - Path：`/upload`
 - Content-Type：`multipart/form-data`
-- 参数：`files`（可重复传多个文件）
-- 限制：最多 10 个文件；单文件最大 100MB
+- 普通文件参数：`files`（可重复传多个文件）
+- 附件目录参数：`upload_mode=attachments_dir`、`files`、与文件一一对应的 `relative_paths`
+- 普通文件限制：最多 10 个文件；单文件最大 100MB
+- 附件目录限制：最多 500 个文件；单文件最大 100MB；目录总大小最大 1GB
 
 示例：
 
@@ -120,6 +131,15 @@ docker run -d \
 curl -X POST "http://localhost:5000/upload" \
   -F "files=@/path/to/a.pdf" \
   -F "files=@/path/to/b.png"
+```
+
+附件目录上传示例（每个 `relative_paths` 与同位置的 `files` 对应）：
+
+```bash
+curl -X POST "http://localhost:5000/upload" \
+  -F "upload_mode=attachments_dir" \
+  -F "relative_paths=SA-4c/evidence.txt" \
+  -F "files=@/path/to/attachments/evidence.txt"
 ```
 
 响应示例：
@@ -139,8 +159,25 @@ curl -X POST "http://localhost:5000/upload" \
 落盘位置：
 
 - `${WORKSPACE_PATH}/assets/uploads/`
+- 附件目录落盘到 `${WORKSPACE_PATH}/assets/uploads/attachments/<batch-id>/`，并保留目录层级
 - 返回的 `path` 为相对路径（从 `assets/` 起）
 - 前端默认通过 `POST /api/upload` 代理到后端 `POST /upload`（读取 `NEXT_PUBLIC_BACKEND_URL`）
+
+前端的“上传附件目录”会自动发送 `upload_mode=attachments_dir`。审阅 Agent 收到返回的
+`directory` 路径后，将其作为 `review_workpaper(..., attachments_dir=...)`；审阅器会递归定位底稿引用的实际证据文件，并读取可解析文本参与分析。
+
+审阅器默认采用“确定性索引 + 受限证据 Agent + 规则/LLM 校验”的混合方式：先快照目录并建立索引；只有附件引用未匹配、文件无法解析或需要进一步交叉查找时，才启动证据 Agent。该 Agent 只能列出、搜索和读取快照内已索引的相对路径，不能执行命令、写文件或访问其他目录。Agent 返回的路径和摘录会经过服务端校验，调查状态、工具调用、来源和未解决事项会写入审阅统计。
+
+### OCR 附件证据
+
+当 `MINERU_OCR_MODE` 不是 `off` 时，受限证据 Agent 会额外获得 `ocr_attachment` 工具。它只能对当前审阅快照中已索引的相对路径调用 MinerU，适用于图片、扫描 PDF 及其他普通解析器无法读取的支持格式；OCR 结果会回到同一个 `ocr_by_path` 缓存，再经过路径和逐字摘录校验后进入审阅上下文。
+
+- `auto`：配置 `MINERU_TOKEN` 时走精确 API（本地签名上传、批量结果轮询、ZIP 中的 `full.md`）；未配置 Token 时走免 Token 的轻量文件上传 API。
+- `lightweight`：免 Token，单文件、10MB/20 页限制，仅返回 Markdown；适合低敏感、较小的图片或扫描件，但受 IP 限频影响。
+- `precise`：需要 `MINERU_TOKEN`，单文件支持至 200MB/200 页，返回 ZIP 结果并读取 `full.md`；更适合正式审阅。
+- 默认关闭是为了避免审计附件未经批准被发送到外部服务。OCR 失败、超限或不支持时只记录 `unresolved`，不会把模型猜测当作证据。
+
+接口实现依据 [MinerU 文档解析接口文档](https://mineru.net/apiManage/docs) 的签名上传、异步轮询和两种 API 模式。
 
 # 前端运行（frontend/）
 

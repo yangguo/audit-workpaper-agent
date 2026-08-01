@@ -190,6 +190,36 @@ async def test_completed_artifact_uses_v1_input_versions_when_sources_change(
 
 
 @pytest.mark.asyncio
+async def test_review_runner_indexes_pinned_attachment_directory(monkeypatch, tmp_path):
+    workpaper_path = _make_workbook(tmp_path)
+    attachments_dir = tmp_path / "attachments"
+    (attachments_dir / "SA-4c").mkdir(parents=True)
+    (attachments_dir / "SA-4c" / "附件1-user-list.txt").write_text(
+        "admin,管理员", encoding="utf-8"
+    )
+    captured = {}
+
+    async def _capture_review(*, wb, checkpoints, attachments, **kwargs):
+        captured["attachments"] = attachments
+        return ([], {"total_findings": 0})
+
+    monkeypatch.setattr(runner, "run_review", _capture_review)
+    review_id = await start_review(
+        file_path=workpaper_path,
+        attachments_dir=str(attachments_dir),
+        source="wp.xlsx",
+    )
+
+    await _REGISTRY[review_id]["task"]
+    await _REGISTRY[review_id]["shadow_task"]
+
+    item = captured["attachments"]["items"][0]
+    assert item.rel_path == "SA-4c/附件1-user-list.txt"
+    assert item.extracted_text == "admin,管理员"
+    assert item.extraction_status == "ok"
+
+
+@pytest.mark.asyncio
 async def test_snapshot_failure_does_not_fail_v1_review(monkeypatch, tmp_path):
     def _fail_snapshot(*args, **kwargs):
         raise OSError("snapshot storage unavailable")

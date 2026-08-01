@@ -220,6 +220,74 @@ async def test_run_review_resolves_loose_sheet_name(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_review_uses_constrained_evidence_agent_and_records_stats(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    monkeypatch.setenv("REVIEW_EVIDENCE_AGENT_MODE", "always")
+    import review.pipeline as _pipe
+    from review.models import AttachmentFile
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SA-4c"
+    ws["A1"] = "标准审计程序"
+    ws["B1"] = "执行审计程序"
+    ws["A5"] = "获取系统用户清单并检查权限。"
+    ws["B5"] = "我们核验用户清单，见附件1。"
+    item = AttachmentFile(
+        index="1", rel_dir="SA-4c", filename="users.txt",
+        rel_path="SA-4c/users.txt", file_type="txt", status="ok",
+        extraction_status="ok", extracted_text="admin,administrator", size=19,
+    )
+    attachments = {
+        "source_type": "directory",
+        "path": "/pinned/attachments",
+        "items": [item],
+        "by_filename": {"users.txt": [item]},
+        "by_rel_path": {"sa-4c/users.txt": [item]},
+        "by_index": {"1": [item]},
+        "by_sheet_norm": {"SA4C": [item]},
+        "status_counts": {"ok": 1},
+    }
+    captured = {}
+
+    async def _fake_agent(**kwargs):
+        captured["sheet"] = kwargs["ws"].title
+        return {
+            "status": "completed",
+            "evidence": [{
+                "path": "SA-4c/users.txt",
+                "file_type": "txt",
+                "extraction_status": "ok",
+                "excerpt": "admin,administrator",
+                "supports": "用户清单中的管理员权限",
+                "confidence": "high",
+            }],
+            "unresolved": [],
+            "tool_trace": [{"tool": "search_attachment_text"}],
+            "tool_calls": 1,
+        }
+
+    async def _fake_evidence_steps(**kwargs):
+        captured["agent_evidence"] = kwargs["attachments"].get("agent_evidence_by_sheet")
+        return []
+
+    monkeypatch.setattr(_pipe, "investigate_sheet", _fake_agent)
+    monkeypatch.setattr(_pipe, "_llm_check_evidence_vs_steps", _fake_evidence_steps)
+
+    findings, stats = await _pipe.run_review(
+        wb=wb, checkpoints={}, attachments=attachments, sheets=None,
+        llm=_FakeLLM('{"results": []}'),
+    )
+
+    assert findings == []
+    assert captured["sheet"] == "SA-4c"
+    assert captured["agent_evidence"]["SA4C"][0]["excerpt"] == "admin,administrator"
+    assert stats["evidence_agent"]["runs"] == 1
+    assert stats["evidence_agent"]["accepted_evidence"] == 1
+    assert stats["evidence_agent"]["tool_calls"] == 1
+
+
+@pytest.mark.asyncio
 async def test_run_review_partial_match_warns_but_does_not_fall_back(monkeypatch):
     """Some requested names resolve (one reviewable, one not), some don't.
 

@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 
 from review.constants import CHECKPOINT_VOCAB
 from review.excel_utils import _build_sheet_text_for_llm, _get_cell_value, _truncate
-from review.attachments import _attachments_context_for_sheet
+from review.attachments import _attachments_context_for_sheet, _verify_attachment_evidence_refs
 from review.llm import _llm_request_json_list, _llm_stat
 from review.models import Finding, _SEVERITY_FROM_CHINESE
 from review.validation import _verify_evidence_refs
@@ -108,12 +108,14 @@ async def _llm_check_sheet_by_checkpoints(
     ws_title: str,
     ws,
     checkpoints: Sequence[str],
-    attachments_preview: Optional[Dict[str, object]] = None,
+    attachments: Optional[Dict[str, object]] = None,
     batch_size: int = 6,
     sleep_seconds: float = 0.2,
+    attachments_preview: Optional[Dict[str, object]] = None,
 ) -> List[Finding]:
     if not checkpoints:
         return []
+    attachments = attachments if attachments is not None else attachments_preview
 
     flat: List[str] = []
     for raw in checkpoints:
@@ -154,7 +156,7 @@ async def _llm_check_sheet_by_checkpoints(
         "你将收到：\n"
         "1) 某个底稿Sheet的文本化内容（每行含单元格坐标与文字）；\n"
         "2) 该Sheet对应的“检查要点”清单；\n"
-        "3) （可选）该Sheet所引用的附件预览清单（附件路径/描述/状态）。\n\n"
+        "3) （可选）该Sheet所引用的附件目录证据（路径/类型/解析状态/提取内容）。\n\n"
         "你的任务：逐条检查要点，判断该Sheet是否存在相关问题（未覆盖/证据不足/表述不清/范围不全/仅访谈等）。\n"
         "重要判断规则（避免误报）：\n"
         "1) 如果Sheet内容明确写明“未执行/未开展/未进行/不存在/未对...审阅/未清查”，则这本身意味着控制未执行或存在缺陷。此时不要将“缺少过程证据”作为独立问题点重复输出；应将问题表述为“控制未执行/未开展（无清查过程证据属结果）”。\n"
@@ -166,7 +168,7 @@ async def _llm_check_sheet_by_checkpoints(
         "- status: \"pass\"/\"fail\"/\"unknown\" (无问题/有问题/不确定)\n"
         "- conclusion: 一句话结论（当status=pass时也建议给出一句话）\n"
         "- reasons: 字符串数组，2-5条要点（说明判断依据）\n"
-        "- evidence_refs: 数组，每个元素含 {sheet, cell_or_range, attachment(可选), excerpt(原文摘录)}。excerpt必须逐字来自sheet_text对应单元格内容。\n"
+        "- evidence_refs: 数组，每个元素含 {sheet, cell_or_range, attachment(可选), excerpt(原文摘录)}。没有attachment时excerpt必须逐字来自sheet_text对应单元格；如果结论依赖附件目录/Agent调查证据，必须填写已提供的相对路径，并让excerpt逐字来自该附件提取文本。\n"
         "  * status=fail时必须至少1个evidence_ref；无法引用原文时status必须为unknown\n"
         "  * excerpt不可编造，必须是sheet_text中能找到的原句片段\n"
         "- severity: \"P0\"/\"P1\"/\"P2\"（当status!=pass时必填）\n"
@@ -187,12 +189,12 @@ async def _llm_check_sheet_by_checkpoints(
     for start in range(0, len(deduped), max(1, int(batch_size))):
         chunk = deduped[start: start + max(1, int(batch_size))]
         end = start + len(chunk)
-        attachments_text = _attachments_context_for_sheet(ws, attachments_preview or {}) if attachments_preview else ""
+        attachments_text = _attachments_context_for_sheet(ws, attachments or {}) if attachments else ""
         payload = {
             "sheet": ws_title,
             "checkpoints": [{"id": start + i + 1, "checkpoint": cp} for i, cp in enumerate(chunk)],
             "sheet_text": sheet_text,
-            "attachments_preview": attachments_text,
+            "attachments": attachments_text,
         }
         user_prompt = "请按要求逐条复核以下检查要点：\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -287,7 +289,12 @@ async def _llm_check_sheet_by_checkpoints(
                                 "attachment": ev_attachment,
                                 "excerpt": ev_excerpt,
                             })
-                evidence_refs_list = _verify_evidence_refs(evidence_refs_list, ws)
+                local_refs = [ref for ref in evidence_refs_list if not ref.get("attachment")]
+                attachment_refs = [ref for ref in evidence_refs_list if ref.get("attachment")]
+                evidence_refs_list = _verify_evidence_refs(local_refs, ws)
+                evidence_refs_list.extend(
+                    _verify_attachment_evidence_refs(attachment_refs, attachments or {}, ws=ws)
+                )
                 if not evidence_refs_list and picked_cells:
                     for cc in picked_cells:
                         ctext = _get_cell_value(ws, cc) or ""
@@ -408,7 +415,7 @@ async def _llm_check_sheet_by_checkpoints(
                         "sheet": ws_title,
                         "checkpoints": [{"id": start + i + 1, "checkpoint": cp}],
                         "sheet_text": sheet_text,
-                        "attachments_preview": attachments_text,
+                        "attachments": attachments_text,
                     }
                     user_prompt1 = "请按要求逐条复核以下检查要点：\n" + json.dumps(payload1, ensure_ascii=False, indent=2)
                     parsed1, err1 = await _llm_request_json_list(

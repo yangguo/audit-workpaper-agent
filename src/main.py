@@ -384,13 +384,18 @@ def _build_understood_requirement(info: Dict[str, Any]) -> Dict[str, Any]:
 
     workpaper = os.path.basename(str(args.get("file_path") or "")) or "（未指定）"
     checkpoints = os.path.basename(str(args.get("checkpoints_path") or "")) or None
-    attachments = os.path.basename(str(args.get("attachments_preview_path") or "")) or None
+    attachments_dir = os.path.basename(str(args.get("attachments_dir") or "")) or None
+    legacy_attachments_preview = os.path.basename(
+        str(args.get("attachments_preview_path") or "")
+    ) or None
 
     extras: list = []
     if checkpoints:
         extras.append(f"检查要点：{checkpoints}")
-    if attachments:
-        extras.append(f"附件预览：{attachments}")
+    if attachments_dir:
+        extras.append(f"附件目录：{attachments_dir}")
+    elif legacy_attachments_preview:
+        extras.append(f"附件预览：{legacy_attachments_preview}")
     extra_text = "，".join(extras)
 
     summary = f"将审阅 {scope}（底稿：{workpaper}"
@@ -405,7 +410,8 @@ def _build_understood_requirement(info: Dict[str, Any]) -> Dict[str, Any]:
         "sheets_raw": sheets_raw,
         "workpaper": workpaper,
         "checkpoints": checkpoints,
-        "attachments_preview": attachments,
+        "attachments_dir": attachments_dir,
+        "attachments_preview": legacy_attachments_preview,
         "summary": summary,
     }
 

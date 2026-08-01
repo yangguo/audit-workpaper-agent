@@ -41,7 +41,7 @@ def test_extract_captures_args_from_ai_message_and_return_from_tool_message():
         _ai_with_tool_call({
             "file_path": "assets/uploads/wp.xlsx",
             "checkpoints_path": "assets/uploads/cp.xlsx",
-            "attachments_preview_path": "",
+            "attachments_dir": "",
             "sheets": "PE-6",
         }),
         _tool_result({"review_id": "rid1", "status": "running"}),
@@ -75,12 +75,12 @@ def test_extract_ignores_other_tools():
 
 # ---- _build_understood_requirement ----
 
-def test_build_summary_single_sheet_with_checkpoints_and_attachments():
+def test_build_summary_single_sheet_with_checkpoints_and_attachment_directory():
     info = {
         "args": {
             "file_path": "assets/uploads/C22 IT一般控制测试2025v5.xlsx",
             "checkpoints_path": "assets/uploads/检查要点.xlsx",
-            "attachments_preview_path": "assets/uploads/preview.xlsx",
+            "attachments_dir": "assets/uploads/attachments/dir-1",
             "sheets": "PE-6",
         },
         "return_value": {"review_id": "rid1", "status": "running"},
@@ -90,12 +90,12 @@ def test_build_summary_single_sheet_with_checkpoints_and_attachments():
     assert out["sheets_raw"] == "PE-6"
     assert out["workpaper"] == "C22 IT一般控制测试2025v5.xlsx"
     assert out["checkpoints"] == "检查要点.xlsx"
-    assert out["attachments_preview"] == "preview.xlsx"
+    assert out["attachments_dir"] == "dir-1"
     assert out["review_id"] == "rid1"
     assert out["status"] == "running"
     assert "PE-6" in out["summary"]
     assert "检查要点：检查要点.xlsx" in out["summary"]
-    assert "附件预览：preview.xlsx" in out["summary"]
+    assert "附件目录：dir-1" in out["summary"]
 
 
 def test_build_summary_empty_sheets_means_all_sheets():
@@ -103,7 +103,7 @@ def test_build_summary_empty_sheets_means_all_sheets():
     out = _build_understood_requirement(info)
     assert out["scope"] == "全部 Sheet"
     assert out["checkpoints"] is None
-    assert out["attachments_preview"] is None
+    assert out["attachments_dir"] is None
     assert "全部 Sheet" in out["summary"]
     # no extras -> no "含" clause
     assert "含" not in out["summary"]
