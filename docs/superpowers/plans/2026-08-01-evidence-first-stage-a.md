@@ -6,7 +6,7 @@
 
 **Goal:** Add a non-blocking shadow artifact for every completed Excel review: an immutable input manifest, bounded Evidence Graph, and V1 findings/statistics snapshot, without changing the existing review result contract.
 
-**Architecture:** The existing runner completes the V1 review and persists findings exactly as today. It then starts a second, isolated shadow task that reopens the source workbook with formulas intact, creates a V2-format artifact under assets/reviews/<review_id>/, and records its own status in the in-memory registry. Artifact failures are logged and recorded but cannot change the V1 review status or findings.
+**Architecture:** Before V1 parsing, the runner creates an immutable local input snapshot when possible, so V1 and the isolated shadow task read the same pinned workbook and auxiliary inputs. If that snapshot fails, V1 continues from the caller-supplied paths while the artifact is marked errored. After V1 persists its findings, the shadow task reopens the pinned workbook with formulas intact, creates a V2-format artifact under assets/reviews/<review_id>/, and records its own status in the in-memory registry. Artifact failures are logged and recorded but cannot change the V1 review status or findings.
 
 **Tech Stack:** Python 3.12+, Pydantic 2 (already installed), openpyxl, asyncio, pytest and pytest-asyncio.
 
