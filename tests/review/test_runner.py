@@ -209,6 +209,34 @@ async def test_snapshot_failure_does_not_fail_v1_review(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_snapshot_failure_is_retained_when_v1_fallback_is_cancelled(
+    monkeypatch, tmp_path
+):
+    def _fail_snapshot(*args, **kwargs):
+        raise OSError("snapshot storage unavailable")
+
+    review_entered = asyncio.Event()
+
+    async def _blocked_review(**kwargs):
+        review_entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ReviewArtifactStore, "snapshot_inputs", _fail_snapshot)
+    monkeypatch.setattr(runner, "run_review", _blocked_review)
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await asyncio.wait_for(review_entered.wait(), timeout=0.5)
+    assert cancel_all_running() == 1
+    with contextlib.suppress(asyncio.CancelledError):
+        await _REGISTRY[review_id]["task"]
+
+    status = get_status(review_id)
+    assert status["status"] == "cancelled"
+    assert status["artifact_status"] == "error"
+    assert status["artifact_error"] == "OSError: snapshot storage unavailable"
+
+
+@pytest.mark.asyncio
 async def test_shadow_failure_does_not_fail_existing_review(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner,

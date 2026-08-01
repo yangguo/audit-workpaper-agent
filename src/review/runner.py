@@ -133,6 +133,10 @@ async def _run_review(
         except Exception as e:
             snapshot_error = f"{type(e).__name__}: {e}"
             _logger.exception("review input snapshot %s failed", review_id)
+            entry = _REGISTRY.get(review_id)
+            if entry is not None:
+                entry["artifact_status"] = "error"
+                entry["artifact_error"] = snapshot_error
             pinned_file_path = file_path
             pinned_checkpoints_path = checkpoints_path
             pinned_attachments_path = attachments_preview_path
@@ -162,10 +166,7 @@ async def _run_review(
         if entry is not None:
             entry["status"] = "completed"
             entry["stats"] = stats
-            if snapshot_error is not None:
-                entry["artifact_status"] = "error"
-                entry["artifact_error"] = snapshot_error
-            else:
+            if snapshot_error is None:
                 entry["artifact_status"] = "pending"
                 entry["shadow_task"] = asyncio.create_task(
                     _capture_shadow_artifact(
