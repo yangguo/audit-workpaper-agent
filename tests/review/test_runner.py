@@ -1,11 +1,15 @@
 import asyncio
+import contextlib
 
 import openpyxl
 import pytest
+import pytest_asyncio
 from langchain_core.messages import AIMessage
 
 import review.runner as runner
 from review.runner import start_review, get_status, cancel_all_running, list_running, _REGISTRY
+from storage.findings_store import load_findings
+from storage.review_artifact_store import ReviewArtifactStore
 
 
 class _FakeRunnable:
@@ -34,13 +38,25 @@ def _pass_payload():
     }]}, ensure_ascii=False)
 
 
-@pytest.fixture(autouse=True)
-def _isolate(monkeypatch, tmp_path):
+@pytest_asyncio.fixture(autouse=True)
+async def _isolate(monkeypatch, tmp_path):
     """Each test gets a clean registry + fake LLM + temp workspace."""
     _REGISTRY.clear()
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
     monkeypatch.setattr(runner, "get_review_llm", lambda: _FakeLLM(_pass_payload()))
+    yield
+
+    tasks = [
+        entry[key]
+        for entry in _REGISTRY.values()
+        for key in ("task", "shadow_task")
+        if isinstance(entry.get(key), asyncio.Task) and not entry[key].done()
+    ]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _make_workbook(tmp_path):
@@ -84,6 +100,36 @@ async def test_review_completes_and_writes_findings(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_completed_review_starts_shadow_artifact_without_changing_v1_result(tmp_path):
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    await _REGISTRY[review_id]["shadow_task"]
+
+    assert get_status(review_id)["status"] == "completed"
+    assert get_status(review_id)["artifact_status"] == "completed"
+    assert load_findings(review_id)["review_id"] == review_id
+    assert ReviewArtifactStore().load_manifest(review_id)["artifact_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_shadow_failure_does_not_fail_existing_review(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runner,
+        "build_evidence_graph",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    await _REGISTRY[review_id]["shadow_task"]
+
+    assert get_status(review_id)["status"] == "completed"
+    assert get_status(review_id)["artifact_status"] == "error"
+    assert load_findings(review_id) is not None
+
+
+@pytest.mark.asyncio
 async def test_start_review_cancels_prior_running(tmp_path):
     wp = _make_workbook(tmp_path)
     first = await start_review(file_path=wp, source="first")
@@ -91,7 +137,6 @@ async def test_start_review_cancels_prior_running(tmp_path):
     second = await start_review(file_path=wp, source="second")
 
     # let tasks settle (the cancelled first task raises CancelledError on await)
-    import contextlib
     with contextlib.suppress(asyncio.CancelledError):
         await _REGISTRY[first]["task"]
     await _REGISTRY[second]["task"]
@@ -115,7 +160,6 @@ async def test_cancel_all_running_cancels_in_flight(tmp_path):
 
 
 def contextlib_suppress():
-    import contextlib
     return contextlib.suppress(asyncio.CancelledError)
 
 

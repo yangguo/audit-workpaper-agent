@@ -3,12 +3,30 @@ import json
 
 import openpyxl
 import pytest
+import pytest_asyncio
 from langchain_core.messages import AIMessage
 
 import review.runner as runner
 import tools.review_workpaper as rwp
 from review.runner import _REGISTRY
 from storage.findings_store import load_findings, save_findings
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _isolate_background_tasks():
+    _REGISTRY.clear()
+    yield
+
+    tasks = [
+        entry[key]
+        for entry in _REGISTRY.values()
+        for key in ("task", "shadow_task")
+        if isinstance(entry.get(key), asyncio.Task) and not entry[key].done()
+    ]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class _FakeRunnable:
@@ -61,7 +79,6 @@ def test_findings_store_load_missing_returns_none(monkeypatch, tmp_path):
 async def test_review_workpaper_tool_starts_background_review(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
-    _REGISTRY.clear()
     uploads = tmp_path / "assets" / "uploads"
     uploads.mkdir(parents=True)
     wb = openpyxl.Workbook()
@@ -85,6 +102,7 @@ async def test_review_workpaper_tool_starts_background_review(monkeypatch, tmp_p
 
     # background task eventually completes and writes findings
     await _REGISTRY[result["review_id"]]["task"]
+    await _REGISTRY[result["review_id"]]["shadow_task"]
     saved = load_findings(result["review_id"])
     assert saved is not None
     assert saved["stats"]["total_findings"] == 1
