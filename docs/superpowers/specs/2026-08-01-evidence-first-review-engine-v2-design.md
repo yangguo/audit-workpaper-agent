@@ -1,7 +1,7 @@
 # 设计：Evidence-First 审计底稿执行器 V2
 
 - 日期：2026-08-01
-- 状态：Draft，待确认后进入实施计划
+- 状态：Stage A 已实施并完成后端验证；Stage B、C、D 及企业化能力仍待实施
 - 主题：以证据事实、规则版本和可评测输出为核心，升级现有审计底稿审阅引擎
 
 ## 1. 背景
@@ -365,19 +365,21 @@ findings.py 负责 V2 到 V1 的投影，保证 Workbench 在前端改造完成�
 
 ### 阶段 A：影子快照
 
-新增 InputManifest、Evidence Graph 和 artifact 写入，但保留 V1 规则与输出。每次审阅同时写入 V2 证据快照，用于验证解析正确性，不改变用户结果。
+已实施：新增 InputManifest、受单元格上限约束的 Evidence Graph 和原子 artifact 写入。V1 审阅完成并持久化原有 findings 后，影子捕获在独立任务中运行，并通过 `asyncio.to_thread` 脱离事件循环；其失败只记录 artifact 状态和错误，不改变 V1 审阅状态或 findings。每个 artifact 记录输入哈希、工作簿证据快照及 V1 findings/statistics 快照，用于验证解析正确性。
+
+完成边界：已验证 V1 API 与 findings 形状保持兼容，`GET /review/{review_id}/status` 仅在存在时增加 artifact 状态字段。Stage A 不交付策略包执行、V2 finding、LLM 判断/引用验证、金标评测、反馈 API、持久化队列、数据库、多租户、RBAC 或审批流；这些能力不应被视为已上线或达到企业就绪标准。
 
 ### 阶段 B：三条规则试点
 
-引入 itgc-core 1.0.0 策略包，将三条高价值确定性规则迁到 V2。V1 与 V2 在金标集和可选影子运行中比较；用户仍接收 V1 投影。
+待实施：引入 itgc-core 1.0.0 策略包，将三条高价值确定性规则迁到 V2。V1 与 V2 在金标集和可选影子运行中比较；用户仍接收 V1 投影。
 
 ### 阶段 C：V2 判断与验证
 
-将证据-步骤一致性和 A-C 判断迁到 JudgementRequest/Verifier，开启 V2 finding 投影。对于无法通过引用验证的结果，明确显示 unknown。
+待实施：将证据-步骤一致性和 A-C 判断迁到 JudgementRequest/Verifier，开启 V2 finding 投影。对于无法通过引用验证的结果，明确显示 unknown。
 
 ### 阶段 D：评测与反馈成为发布门禁
 
-引入金标评测命令、CI 报告和人工反馈 API。规则包或模型变更必须附带评测结果。
+待实施：引入金标评测命令、CI 报告和人工反馈 API。规则包或模型变更必须附带评测结果。
 
 企业队列、数据库、多租户与审批流仅在阶段 D 已证明准确性和使用频率后单独设计。
 
