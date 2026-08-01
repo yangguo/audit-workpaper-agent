@@ -23,6 +23,26 @@ bash scripts/local_run.sh -m node -n node_name
 bash scripts/http_run.sh -p 5000
 ```
 
+## 本地配置 LLM
+
+后端使用 OpenAI-compatible 接口。Agent 对话和 Excel 审阅共用同一个 API key/base URL，但可以通过两个模型变量分别指定模型。
+
+```bash
+cp .env.example .env
+# 编辑 .env，至少填写 LLM_API_KEY、LLM_BASE_URL，
+# 并将 AGENT_LLM_MODEL、REVIEW_LLM_MODEL 改成服务商实际可用的模型名
+```
+
+`LLM_BASE_URL` 填服务商的 API 根地址（通常以 `/v1` 结尾），不要填写具体的 `/chat/completions` 路径。启动方式会自动读取项目根目录的 `.env`：
+
+```bash
+bash scripts/http_run.sh -p 5000
+# 或
+bash scripts/local_run.sh -m flow
+```
+
+完整变量示例见 [.env.example](/Users/vyang/Desktop/spaces/audit-workpaper-agent/.env.example)。
+
 # Docker 部署（后端）
 
 ## 构建镜像
@@ -148,4 +168,3 @@ npm run dev
 ```
 
 默认访问地址：`http://localhost:3000`
-
