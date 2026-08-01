@@ -176,11 +176,49 @@ async def _capture_shadow_artifact(
     stats: dict,
 ) -> None:
     """Persist a V2 artifact without affecting the completed V1 review."""
-    store = ReviewArtifactStore()
     entry = _REGISTRY.get(review_id)
     if entry is not None:
         entry["artifact_status"] = "running"
 
+    try:
+        error = await asyncio.to_thread(
+            _write_shadow_artifact,
+            review_id=review_id,
+            file_path=file_path,
+            checkpoints_path=checkpoints_path,
+            attachments_preview_path=attachments_preview_path,
+            sheets=sheets,
+            source=source,
+            findings=findings,
+            stats=stats,
+        )
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+        _logger.exception("shadow artifact capture %s could not start", review_id)
+
+    entry = _REGISTRY.get(review_id)
+    if entry is None:
+        return
+    if error is None:
+        entry["artifact_status"] = "completed"
+    else:
+        entry["artifact_status"] = "error"
+        entry["artifact_error"] = error
+
+
+def _write_shadow_artifact(
+    *,
+    review_id: str,
+    file_path: str,
+    checkpoints_path: str,
+    attachments_preview_path: str,
+    sheets: Optional[str],
+    source: str,
+    findings: list[dict],
+    stats: dict,
+) -> Optional[str]:
+    """Run synchronous artifact capture off the event-loop thread."""
+    store = ReviewArtifactStore()
     try:
         inputs = build_input_files(
             workpaper_path=file_path,
@@ -202,10 +240,7 @@ async def _capture_shadow_artifact(
         store.write_evidence(review_id, graph)
         store.write_v1_findings(review_id, findings, stats)
         store.complete(review_id)
-
-        entry = _REGISTRY.get(review_id)
-        if entry is not None:
-            entry["artifact_status"] = "completed"
+        return None
     except Exception as e:
         error = f"{type(e).__name__}: {e}"
         _logger.exception("shadow artifact capture %s failed", review_id)
@@ -213,7 +248,4 @@ async def _capture_shadow_artifact(
             store.fail(review_id, error)
         except Exception:
             _logger.exception("shadow artifact failure record %s failed", review_id)
-        entry = _REGISTRY.get(review_id)
-        if entry is not None:
-            entry["artifact_status"] = "error"
-            entry["artifact_error"] = error
+        return error

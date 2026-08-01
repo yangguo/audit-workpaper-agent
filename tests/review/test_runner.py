@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import threading
 
 import openpyxl
 import pytest
@@ -127,6 +128,44 @@ async def test_shadow_failure_does_not_fail_existing_review(monkeypatch, tmp_pat
     assert get_status(review_id)["status"] == "completed"
     assert get_status(review_id)["artifact_status"] == "error"
     assert load_findings(review_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_shadow_artifact_capture_keeps_event_loop_responsive(monkeypatch, tmp_path):
+    release_capture = threading.Event()
+    original_build_input_files = runner.build_input_files
+
+    def _blocked_build_input_files(*args, **kwargs):
+        release_capture.wait(timeout=0.2)
+        return original_build_input_files(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "build_input_files", _blocked_build_input_files)
+    review_id = "shadow-responsive"
+    _REGISTRY[review_id] = {"status": "completed"}
+    shadow_task = asyncio.create_task(
+        runner._capture_shadow_artifact(
+            review_id=review_id,
+            file_path=_make_workbook(tmp_path),
+            checkpoints_path="",
+            attachments_preview_path="",
+            sheets=None,
+            source="wp.xlsx",
+            findings=[],
+            stats={},
+        )
+    )
+
+    timer = threading.Timer(0.2, release_capture.set)
+    timer.start()
+    try:
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        await asyncio.sleep(0.01)
+        assert loop.time() - started_at < 0.1
+    finally:
+        release_capture.set()
+        timer.cancel()
+        await shadow_task
 
 
 @pytest.mark.asyncio
