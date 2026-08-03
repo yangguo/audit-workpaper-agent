@@ -54,6 +54,19 @@ bash scripts/local_run.sh -m flow
 
 相关配置：`REVIEW_POLICY_MODE=shadow|off`（默认 `shadow`）、`REVIEW_POLICY_PACK_ID`、`REVIEW_POLICY_PACK_VERSION`、`REVIEW_POLICY_PACK_ROOT` 和可选的 `REVIEW_ENGINE_VERSION`。策略包加载或执行失败只会将 shadow artifact 标记为 error，不会回滚或修改已完成的 V1 审阅。
 
+## 阶段 C 受限判断试点
+
+阶段 C 在阶段 B 的 Evidence Graph 和附件快照之上增加两类受限 LLM 判断：证据文件是否与执行步骤对应，以及实际执行程序是否满足标准程序的控制意图。它使用独立、版本化的 `itgc-judgement/1.0.0` 策略包；每个请求只携带目标控制事实和已固定的证据片段，不把整张 Sheet 或任意目录交给模型。
+
+阶段 C 默认关闭。设置 `REVIEW_JUDGEMENT_MODE=shadow` 后，审阅会在 V1 和阶段 B shadow artifact 完成后，额外写入：
+
+- `judgements.json`：请求、模型原始结果、逐条引用校验状态和执行统计。
+- `v2-findings.json`：V2 Finding、稳定身份、`supported|contradicted|insufficient` 决策、精确证据引用，以及 V1 兼容投影。
+
+服务端只接受请求白名单内的证据 ID、合法偏移、逐字摘录和匹配的内容哈希；校验失败或证据不足会落为 `unknown`，不会用模型自行生成的路径或摘录补证。阶段 C 失败只会把 shadow artifact 标记为 error，既不会覆盖 `findings.json`，也不会改变现有 V1 `/findings/{review_id}` 响应。启用该模式会消耗 `REVIEW_LLM_MODEL` 对应的 LLM 额度，并受 `REVIEW_JUDGEMENT_MAX_REQUESTS` 限制。
+
+相关配置：`REVIEW_JUDGEMENT_MODE=shadow|off`（默认 `off`）、`REVIEW_JUDGEMENT_PACK_ID`、`REVIEW_JUDGEMENT_PACK_VERSION`、可选的 `REVIEW_JUDGEMENT_PACK_ROOT` 和 `REVIEW_JUDGEMENT_MAX_REQUESTS`。未设置 `REVIEW_JUDGEMENT_PACK_ROOT` 时，会复用 `REVIEW_POLICY_PACK_ROOT`，再回退到仓库内 `policy_packs/`。
+
 # Docker 部署（后端）
 
 ## 构建镜像
@@ -112,6 +125,11 @@ docker run -d \
 | `REVIEW_POLICY_PACK_VERSION` | 否 | 策略包版本，默认 `1.0.0` |
 | `REVIEW_POLICY_PACK_ROOT` | 否 | 策略包根目录；不设置时使用仓库内 `policy_packs/` |
 | `REVIEW_ENGINE_VERSION` | 否 | artifact 中记录的执行器版本，默认 `stage-b-policy-shadow` |
+| `REVIEW_JUDGEMENT_MODE` | 否 | 阶段 C 受限 LLM 判断：`shadow` 或 `off`；默认 `off` |
+| `REVIEW_JUDGEMENT_PACK_ID` | 否 | 阶段 C 判断策略包 ID，默认 `itgc-judgement` |
+| `REVIEW_JUDGEMENT_PACK_VERSION` | 否 | 阶段 C 判断策略包版本，默认 `1.0.0` |
+| `REVIEW_JUDGEMENT_PACK_ROOT` | 否 | 阶段 C 判断策略包根目录；未设置时复用 `REVIEW_POLICY_PACK_ROOT` 或仓库内 `policy_packs/` |
+| `REVIEW_JUDGEMENT_MAX_REQUESTS` | 否 | 单次审阅最多执行的阶段 C 判断请求数，默认 `200` |
 | `MINERU_OCR_MODE` | 否 | OCR 模式：`off`（默认）、`auto`、`lightweight`、`precise`；远程处理附件前需明确开启 |
 | `MINERU_TOKEN` | `precise/auto` 时 | MinerU 精确解析 API Token；`auto` 有 Token 时优先走精确 API |
 | `MINERU_MODEL_VERSION` | 否 | 精确 API 模型，默认 `vlm` |

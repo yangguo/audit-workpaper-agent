@@ -86,6 +86,7 @@ class ReviewManifest(BaseModel):
     requested_sheets: list[str] = Field(default_factory=list)
     inputs: list[InputFile] = Field(default_factory=list)
     policy_pack: PolicyPackRef | None = None
+    judgement_policy_pack: PolicyPackRef | None = None
     engine_version: str = "stage-a-shadow"
     artifact_status: ArtifactStatus = "running"
     created_at: datetime = Field(

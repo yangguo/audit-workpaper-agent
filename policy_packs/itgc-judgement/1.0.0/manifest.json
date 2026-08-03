@@ -1,0 +1,11 @@
+{
+  "id": "itgc-judgement",
+  "version": "1.0.0",
+  "title": "ITGC V2 Judgement Rules",
+  "domain": "itgc",
+  "engine_compatibility": "stage-c",
+  "rules": [
+    "rules/evidence-step-alignment.json",
+    "rules/procedure-correspondence.json"
+  ]
+}

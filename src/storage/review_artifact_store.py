@@ -203,6 +203,20 @@ class ReviewArtifactStore:
             self._to_json_payload(payload),
         )
 
+    def write_judgements(self, review_id: str, payload: Any) -> Path:
+        """Persist Stage-C requests, raw summaries, and verification results."""
+        return self._atomic_write(
+            self._artifact_dir(review_id) / "judgements.json",
+            self._to_json_payload(payload),
+        )
+
+    def write_v2_findings(self, review_id: str, payload: Any) -> Path:
+        """Persist V2 findings separately from the authoritative V1 findings."""
+        return self._atomic_write(
+            self._artifact_dir(review_id) / "v2-findings.json",
+            self._to_json_payload(payload),
+        )
+
     def complete(self, review_id: str) -> Path:
         payload = self._load_required_manifest(review_id)
         payload["artifact_status"] = "completed"

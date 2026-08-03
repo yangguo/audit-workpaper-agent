@@ -45,6 +45,23 @@ def test_review_manifest_serializes_policy_pack_reference():
     assert payload["policy_pack"] == {"id": "itgc-core", "version": "1.0.0"}
 
 
+def test_review_manifest_serializes_judgement_policy_pack_reference():
+    manifest = ReviewManifest(
+        review_id="a" * 32,
+        source="wp.xlsx",
+        judgement_policy_pack=PolicyPackRef(
+            id="itgc-judgement", version="1.0.0"
+        ),
+    )
+
+    payload = manifest.model_dump(mode="json")
+
+    assert payload["judgement_policy_pack"] == {
+        "id": "itgc-judgement",
+        "version": "1.0.0",
+    }
+
+
 def test_evidence_graph_serializes_captured_cell():
     cell = CellEvidence(
         evidence_id="ev:1",

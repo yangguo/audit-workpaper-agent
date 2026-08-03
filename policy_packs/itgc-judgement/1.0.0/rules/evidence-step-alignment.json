@@ -1,0 +1,20 @@
+{
+  "rule_id": "itgc.judgement.evidence_step_alignment",
+  "version": "1.0.0",
+  "title": "证据与执行步骤一致性",
+  "evaluator_id": "judgement.evidence_step_alignment",
+  "execution_mode": "judgement",
+  "applies_to": {"fact_type": "ControlFact"},
+  "judgement_question": "执行程序中引用或提供的证据，是否能够支持该审计步骤要验证的控制点、属性和结论？",
+  "allowed_decisions": ["supported", "contradicted", "insufficient"],
+  "counterexamples": [
+    "只列出附件名称但没有说明证据对应的核查点",
+    "附件内容与执行程序描述的控制对象无关",
+    "证据解析状态异常或无法逐字引用"
+  ],
+  "severity": "P1",
+  "risk_type": "证据不足",
+  "required_evidence_types": ["截图/参数界面", "导出清单", "日志/台账/清单", "审批/授权证据"],
+  "remediation_template": "补充与审计步骤直接对应的原始证据，并在底稿中说明“证据→核查点→结论”的对应关系。",
+  "enabled": true
+}

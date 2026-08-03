@@ -80,6 +80,19 @@ def _make_workbook(tmp_path):
     return str(path)
 
 
+def _make_judgement_workbook(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SA-4c"
+    ws["A1"] = "标准审计程序"
+    ws["B1"] = "执行审计程序"
+    ws["A5"] = "审计期间获取系统用户清单并检查管理员权限。"
+    ws["B5"] = "我们获取用户清单截图，并核对管理员权限。"
+    path = tmp_path / "judgement-wp.xlsx"
+    wb.save(str(path))
+    return str(path)
+
+
 @pytest.mark.asyncio
 async def test_start_review_returns_running_status_immediately(tmp_path):
     wp = _make_workbook(tmp_path)
@@ -121,6 +134,80 @@ async def test_completed_review_starts_shadow_artifact_without_changing_v1_resul
     assert get_status(review_id)["artifact_status"] == "completed"
     assert load_findings(review_id)["review_id"] == review_id
     assert ReviewArtifactStore().load_manifest(review_id)["artifact_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_stage_c_shadow_writes_judgements_and_v2_findings_without_changing_v1(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("REVIEW_JUDGEMENT_MODE", "shadow")
+    review_id = await start_review(
+        file_path=_make_judgement_workbook(tmp_path), source="wp.xlsx"
+    )
+
+    await _REGISTRY[review_id]["task"]
+    v1_payload = load_findings(review_id)
+    await _REGISTRY[review_id]["shadow_task"]
+
+    artifact_dir = tmp_path / "assets" / "reviews" / review_id
+    manifest = json.loads((artifact_dir / "manifest.json").read_text("utf-8"))
+    judgements = json.loads((artifact_dir / "judgements.json").read_text("utf-8"))
+    v2_findings = json.loads(
+        (artifact_dir / "v2-findings.json").read_text("utf-8")
+    )
+
+    assert get_status(review_id)["status"] == "completed"
+    assert get_status(review_id)["artifact_status"] == "completed"
+    assert manifest["judgement_policy_pack"] == {
+        "id": "itgc-judgement",
+        "version": "1.0.0",
+    }
+    assert judgements["schema_version"] == "stage-c-judgements/1"
+    assert judgements["requests"]
+    assert judgements["results"]
+    assert v2_findings["schema_version"] == "stage-c-v2-findings/1"
+    assert v2_findings["findings"]
+    assert load_findings(review_id) == v1_payload
+
+
+@pytest.mark.asyncio
+async def test_stage_c_off_does_not_write_judgement_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("REVIEW_JUDGEMENT_MODE", "off")
+    review_id = await start_review(
+        file_path=_make_judgement_workbook(tmp_path), source="wp.xlsx"
+    )
+
+    await _REGISTRY[review_id]["task"]
+    await _REGISTRY[review_id]["shadow_task"]
+
+    artifact_dir = tmp_path / "assets" / "reviews" / review_id
+    manifest = json.loads((artifact_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["judgement_policy_pack"] is None
+    assert not (artifact_dir / "judgements.json").exists()
+    assert not (artifact_dir / "v2-findings.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_stage_c_failure_does_not_fail_completed_v1_review(monkeypatch, tmp_path):
+    monkeypatch.setenv("REVIEW_JUDGEMENT_MODE", "shadow")
+
+    async def _fail_judgement(*args, **kwargs):
+        raise RuntimeError("stage c boom")
+
+    monkeypatch.setattr(runner, "execute_judgement_requests", _fail_judgement)
+    review_id = await start_review(
+        file_path=_make_judgement_workbook(tmp_path), source="wp.xlsx"
+    )
+
+    await _REGISTRY[review_id]["task"]
+    v1_payload = load_findings(review_id)
+    await _REGISTRY[review_id]["shadow_task"]
+
+    status = get_status(review_id)
+    assert status["status"] == "completed"
+    assert status["artifact_status"] == "error"
+    assert "RuntimeError: stage c boom" in status["artifact_error"]
+    assert load_findings(review_id) == v1_payload
 
 
 @pytest.mark.asyncio

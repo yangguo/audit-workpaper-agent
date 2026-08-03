@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -20,8 +20,12 @@ TRUSTED_EVALUATOR_IDS = frozenset(
         "procedure.interview_only",
         "procedure.required_evidence",
         "scope.os_db_admin",
+        "judgement.evidence_step_alignment",
+        "judgement.procedure_correspondence",
     }
 )
+
+JudgementDecision = Literal["supported", "contradicted", "insufficient"]
 
 
 class PolicyPackError(ValueError):
@@ -40,6 +44,14 @@ class PolicyRule(BaseModel):
     risk_type: Literal["覆盖性", "一致性", "证据不足", "方法性", "逻辑性", "跨字段一致性"]
     required_evidence_types: list[str] = Field(default_factory=list, max_length=20)
     remediation_template: str = Field(min_length=1, max_length=2000)
+    execution_mode: Literal["deterministic", "judgement"] = "deterministic"
+    judgement_question: str | None = Field(default=None, max_length=1200)
+    allowed_decisions: list[JudgementDecision] = Field(
+        default_factory=lambda: ["supported", "contradicted", "insufficient"],
+        min_length=1,
+        max_length=3,
+    )
+    counterexamples: list[str] = Field(default_factory=list, max_length=10)
     enabled: bool = True
 
     @field_validator("rule_id", "evaluator_id")
@@ -57,6 +69,14 @@ class PolicyRule(BaseModel):
         if not _VERSION_RE.fullmatch(value):
             raise ValueError("version must use MAJOR.MINOR.PATCH")
         return value
+
+    @model_validator(mode="after")
+    def _validate_execution_mode(self) -> "PolicyRule":
+        if self.execution_mode == "judgement" and not self.judgement_question:
+            raise ValueError("judgement rules require judgement_question")
+        if len(set(self.allowed_decisions)) != len(self.allowed_decisions):
+            raise ValueError("allowed_decisions must not contain duplicates")
+        return self
 
 
 class PolicyPackManifest(BaseModel):

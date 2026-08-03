@@ -108,6 +108,31 @@ def test_artifact_store_writes_stage_b_plan_and_policy_findings_atomically(
     ) == policy_findings
 
 
+def test_artifact_store_writes_stage_c_judgements_and_v2_findings_atomically(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    store = ReviewArtifactStore()
+    store.begin(_manifest("review-stage-c"))
+
+    judgements = {
+        "schema_version": "stage-c-judgements/1",
+        "requests": [],
+        "results": [],
+    }
+    v2_findings = {
+        "schema_version": "stage-c-v2-findings/1",
+        "findings": [],
+    }
+
+    store.write_judgements("review-stage-c", judgements)
+    store.write_v2_findings("review-stage-c", v2_findings)
+
+    artifact_dir = tmp_path / "assets" / "reviews" / "review-stage-c"
+    assert json.loads((artifact_dir / "judgements.json").read_text("utf-8")) == judgements
+    assert json.loads((artifact_dir / "v2-findings.json").read_text("utf-8")) == v2_findings
+
+
 def test_artifact_store_marks_failure_without_marking_completed(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     store = ReviewArtifactStore()

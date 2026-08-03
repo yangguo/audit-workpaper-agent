@@ -1,0 +1,20 @@
+{
+  "rule_id": "itgc.judgement.procedure_correspondence",
+  "version": "1.0.0",
+  "title": "标准与执行程序对应性",
+  "evaluator_id": "judgement.procedure_correspondence",
+  "execution_mode": "judgement",
+  "applies_to": {"fact_type": "ControlFact"},
+  "judgement_question": "实际执行程序是否满足标准程序的控制意图、关键对象、条件和证据要求？",
+  "allowed_decisions": ["supported", "contradicted", "insufficient"],
+  "counterexamples": [
+    "执行描述仅泛泛说明已完成检查",
+    "实际检查对象没有覆盖标准要求的关键对象",
+    "标准要求的条件或证据类型在执行中没有体现"
+  ],
+  "severity": "P1",
+  "risk_type": "一致性",
+  "required_evidence_types": ["标准程序", "执行程序", "执行证据"],
+  "remediation_template": "逐项补充标准程序与实际执行动作、对象、条件及证据来源的对应说明。",
+  "enabled": true
+}

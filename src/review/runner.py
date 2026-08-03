@@ -20,8 +20,10 @@ import openpyxl
 from review.attachments import build_attachment_index, load_attachments_preview_xlsx
 from review.checkpoints import load_checkpoints_xlsx
 from review.contracts import PolicyPackRef, ReviewManifest
-from review.evidence import build_evidence_graph, build_input_files
+from review.evidence import build_evidence_graph, build_input_files, sha256_file
 from review.evaluators import execute_policy_plan
+from review.findings import build_v2_findings, project_v2_findings_to_v1
+from review.judgement import build_judgement_requests, execute_judgement_requests
 from review.llm import LLM_CALL_STATS, get_review_llm
 from review.planner import build_review_plan
 from review.policy import load_policy_pack
@@ -43,6 +45,26 @@ def _stage_b_policy_config() -> tuple[str, str, str, str | None]:
     pack_version = os.getenv("REVIEW_POLICY_PACK_VERSION", "1.0.0").strip()
     root = os.getenv("REVIEW_POLICY_PACK_ROOT", "").strip() or None
     return mode, pack_id, pack_version, root
+
+
+def _stage_c_judgement_config() -> tuple[str, str, str, str | None, int]:
+    mode = os.getenv("REVIEW_JUDGEMENT_MODE", "off").strip().lower()
+    if mode not in {"shadow", "off"}:
+        raise ValueError("REVIEW_JUDGEMENT_MODE must be shadow or off")
+    pack_id = os.getenv("REVIEW_JUDGEMENT_PACK_ID", "itgc-judgement").strip()
+    pack_version = os.getenv("REVIEW_JUDGEMENT_PACK_VERSION", "1.0.0").strip()
+    root = (
+        os.getenv("REVIEW_JUDGEMENT_PACK_ROOT", "").strip()
+        or os.getenv("REVIEW_POLICY_PACK_ROOT", "").strip()
+        or None
+    )
+    try:
+        max_requests = int(os.getenv("REVIEW_JUDGEMENT_MAX_REQUESTS", "200"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("REVIEW_JUDGEMENT_MAX_REQUESTS must be an integer") from exc
+    if max_requests <= 0:
+        raise ValueError("REVIEW_JUDGEMENT_MAX_REQUESTS must be greater than zero")
+    return mode, pack_id, pack_version, root, max_requests
 
 
 def _now() -> str:
@@ -204,6 +226,8 @@ async def _run_review(
                         source=source,
                         findings=findings,
                         stats=stats,
+                        llm=llm,
+                        attachments=attachments,
                     )
                 )
         _logger.info("background review %s completed: %d findings", review_id, len(findings))
@@ -232,6 +256,8 @@ async def _capture_shadow_artifact(
     source: str,
     findings: list[dict],
     stats: dict,
+    llm=None,
+    attachments: Optional[dict[str, object]] = None,
 ) -> None:
     """Persist a V2 artifact without affecting the completed V1 review."""
     entry = _REGISTRY.get(review_id)
@@ -257,6 +283,20 @@ async def _capture_shadow_artifact(
         error = f"{type(e).__name__}: {e}"
         _logger.exception("shadow artifact capture %s could not start", review_id)
 
+    if error is None:
+        try:
+            error = await _capture_stage_c_shadow(
+                review_id=review_id,
+                file_path=file_path,
+                sheets=sheets,
+                llm=llm,
+                attachments=attachments,
+                workspace_path=workspace_path,
+            )
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            _logger.exception("stage c shadow capture %s failed", review_id)
+
     entry = _REGISTRY.get(review_id)
     if entry is None:
         return
@@ -265,6 +305,101 @@ async def _capture_shadow_artifact(
     else:
         entry["artifact_status"] = "error"
         entry["artifact_error"] = error
+
+
+def _load_stage_c_snapshot(file_path: str):
+    wb = openpyxl.load_workbook(file_path, data_only=False)
+    graph = build_evidence_graph(wb, source_sha256=sha256_file(file_path))
+    return wb, graph
+
+
+async def _capture_stage_c_shadow(
+    *,
+    review_id: str,
+    file_path: str,
+    sheets: Optional[str],
+    llm,
+    attachments: Optional[dict[str, object]],
+    workspace_path: str,
+) -> Optional[str]:
+    """Run opt-in Stage-C judgement after V1 and Stage-B capture complete."""
+    mode, pack_id, pack_version, pack_root, max_requests = _stage_c_judgement_config()
+    if mode == "off":
+        return None
+    if llm is None:
+        return "RuntimeError: Stage C LLM is unavailable"
+
+    store = ReviewArtifactStore(workspace_path=workspace_path)
+    try:
+        policy_pack = load_policy_pack(
+            pack_id=pack_id,
+            version=pack_version,
+            root=pack_root,
+        )
+        wb, graph = await asyncio.to_thread(_load_stage_c_snapshot, file_path)
+        requests = build_judgement_requests(
+            workbook=wb,
+            evidence_graph=graph,
+            policy_pack=policy_pack,
+            sheets=sheets,
+            attachments=attachments,
+            max_requests=max_requests,
+        )
+        executions = await execute_judgement_requests(requests, llm=llm)
+        engine_version = os.getenv(
+            "REVIEW_ENGINE_VERSION", "stage-b-policy-shadow"
+        ).strip()
+        v2_findings = build_v2_findings(
+            requests=requests,
+            executions=executions,
+            policy_pack=policy_pack,
+            engine_version=engine_version,
+        )
+        policy_metadata = {"id": policy_pack.id, "version": policy_pack.version}
+        judgement_payload = {
+            "schema_version": "stage-c-judgements/1",
+            "engine_version": engine_version,
+            "source_sha256": graph.source_sha256,
+            "policy_pack": policy_metadata,
+            "requests": [request.model_dump(mode="json") for request in requests],
+            "results": [result.model_dump(mode="json") for result in executions],
+            "stats": {
+                "requests": len(requests),
+                "results": len(executions),
+                "by_verification_status": _count_values(
+                    [result.verification_status for result in executions]
+                ),
+            },
+        }
+        v2_payload = {
+            "schema_version": "stage-c-v2-findings/1",
+            "engine_version": engine_version,
+            "source_sha256": graph.source_sha256,
+            "policy_pack": policy_metadata,
+            "findings": v2_findings,
+            "v1_projection": project_v2_findings_to_v1(v2_findings),
+            "stats": {
+                "total_findings": len(v2_findings),
+                "by_status": _count_values(
+                    [str(item.get("status", "")) for item in v2_findings]
+                ),
+            },
+        }
+        await asyncio.to_thread(
+            store.write_judgements, review_id, judgement_payload
+        )
+        await asyncio.to_thread(store.write_v2_findings, review_id, v2_payload)
+        return None
+    except Exception as e:
+        _logger.exception("stage c shadow capture %s failed", review_id)
+        return f"{type(e).__name__}: {e}"
+
+
+def _count_values(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def _write_shadow_artifact(
@@ -284,6 +419,9 @@ def _write_shadow_artifact(
     store = ReviewArtifactStore(workspace_path=workspace_path)
     try:
         policy_mode, policy_id, policy_version, policy_root = _stage_b_policy_config()
+        judgement_mode, judgement_id, judgement_version, _, _ = (
+            _stage_c_judgement_config()
+        )
         engine_version = os.getenv(
             "REVIEW_ENGINE_VERSION",
             "stage-b-policy-shadow" if policy_mode == "shadow" else "stage-a-shadow",
@@ -304,6 +442,11 @@ def _write_shadow_artifact(
             policy_pack=(
                 PolicyPackRef(id=policy_id, version=policy_version)
                 if policy_mode == "shadow"
+                else None
+            ),
+            judgement_policy_pack=(
+                PolicyPackRef(id=judgement_id, version=judgement_version)
+                if judgement_mode == "shadow"
                 else None
             ),
             engine_version=engine_version,

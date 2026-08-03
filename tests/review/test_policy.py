@@ -33,6 +33,23 @@ _RULES = [
     },
 ]
 
+_JUDGEMENT_RULE = {
+    "rule_id": "itgc.judgement.procedure_correspondence",
+    "version": "1.0.0",
+    "title": "标准与执行程序对应性",
+    "evaluator_id": "judgement.procedure_correspondence",
+    "execution_mode": "judgement",
+    "applies_to": {"fact_type": "ControlFact"},
+    "judgement_question": "实际执行程序是否满足标准程序的控制意图和关键要求？",
+    "allowed_decisions": ["supported", "contradicted", "insufficient"],
+    "counterexamples": ["执行仅泛泛描述，未覆盖标准中的关键对象或证据要求"],
+    "severity": "P1",
+    "risk_type": "一致性",
+    "required_evidence_types": ["标准程序", "执行程序"],
+    "remediation_template": "补充标准程序与执行证据之间的对应说明。",
+    "enabled": True,
+}
+
 
 def _write_pack(root: Path, *, rules=None, manifest_overrides=None):
     pack_root = root / "itgc-core" / "1.0.0"
@@ -94,3 +111,22 @@ def test_load_policy_pack_rejects_missing_rule_file(tmp_path):
 def test_load_policy_pack_rejects_path_traversal(tmp_path):
     with pytest.raises(PolicyPackError, match="path"):
         load_policy_pack(root=tmp_path, pack_id="../itgc-core")
+
+
+def test_load_stage_c_judgement_pack_contains_versioned_judgement_rules():
+    pack = load_policy_pack(pack_id="itgc-judgement", version="1.0.0")
+
+    assert [rule.rule_id for rule in pack.rules] == [
+        "itgc.judgement.evidence_step_alignment",
+        "itgc.judgement.procedure_correspondence",
+    ]
+    assert all(rule.execution_mode == "judgement" for rule in pack.rules)
+    assert all(rule.judgement_question for rule in pack.rules)
+
+
+def test_load_policy_pack_rejects_judgement_rule_without_question(tmp_path):
+    rule = dict(_JUDGEMENT_RULE)
+    rule.pop("judgement_question")
+
+    with pytest.raises(PolicyPackError, match="invalid policy rule"):
+        load_policy_pack(root=_write_pack(tmp_path, rules=[rule]))
