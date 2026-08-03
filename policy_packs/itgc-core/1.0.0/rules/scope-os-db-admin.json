@@ -1,0 +1,12 @@
+{
+  "rule_id": "itgc.scope.os_db_admin",
+  "version": "1.0.0",
+  "title": "特权账号范围未覆盖 OS/DB 管理员",
+  "evaluator_id": "scope.os_db_admin",
+  "applies_to": {"fact_type": "SheetFact", "sheet_ids": ["SA-4c"]},
+  "severity": "P1",
+  "risk_type": "覆盖性",
+  "required_evidence_types": ["OS/DB 管理员清单", "截图/导出"],
+  "remediation_template": "补充获取并核对 OS/DB 层面管理员账号清单，并评估与应用层管理员职责冲突及共享风险。",
+  "enabled": true
+}

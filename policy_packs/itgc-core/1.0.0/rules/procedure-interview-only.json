@@ -1,0 +1,12 @@
+{
+  "rule_id": "itgc.procedure.interview_only",
+  "version": "1.0.0",
+  "title": "仅访谈且缺少实质性证据",
+  "evaluator_id": "procedure.interview_only",
+  "applies_to": {"fact_type": "ControlFact"},
+  "severity": "P1",
+  "risk_type": "证据不足",
+  "required_evidence_types": ["截图", "导出清单", "日志/台账/清单", "审批/授权证据"],
+  "remediation_template": "补充系统截图、导出清单、日志台账或审批记录等实质性证据，并在执行程序中明确证据来源与核查步骤。",
+  "enabled": true
+}

@@ -1,0 +1,12 @@
+{
+  "rule_id": "itgc.procedure.required_evidence",
+  "version": "1.0.0",
+  "title": "标准要求证据但执行未体现",
+  "evaluator_id": "procedure.required_evidence",
+  "applies_to": {"fact_type": "ControlFact"},
+  "severity": "P1",
+  "risk_type": "证据不足",
+  "required_evidence_types": ["截图/参数界面", "导出清单", "日志/台账/清单", "审批/授权证据", "协议/合同条款"],
+  "remediation_template": "对照标准程序逐条补齐所需证据，并在底稿中保留可复核的原始文件或路径。",
+  "enabled": true
+}

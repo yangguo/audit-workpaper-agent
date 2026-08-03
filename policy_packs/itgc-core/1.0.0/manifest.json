@@ -1,0 +1,12 @@
+{
+  "id": "itgc-core",
+  "version": "1.0.0",
+  "title": "ITGC Core",
+  "domain": "itgc",
+  "engine_compatibility": "stage-b",
+  "rules": [
+    "rules/procedure-interview-only.json",
+    "rules/procedure-required-evidence.json",
+    "rules/scope-os-db-admin.json"
+  ]
+}
