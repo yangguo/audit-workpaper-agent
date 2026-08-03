@@ -98,3 +98,12 @@ def test_verifier_accepts_insufficient_with_reason_without_evidence():
 
     assert result.verification_status == "insufficient"
     assert result.errors == []
+
+
+def test_judgement_response_rejects_insufficient_without_reason():
+    with pytest.raises(ValueError, match="unknown_reason"):
+        JudgementResponse(
+            decision="insufficient",
+            conclusion="现有资料不足以判断。",
+            evidence_refs=[],
+        )

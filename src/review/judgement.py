@@ -99,6 +99,19 @@ class JudgementResponse(BaseModel):
     unknown_reason: str = Field(default="", max_length=1200)
     reasoning_summary: list[str] = Field(default_factory=list, max_length=3)
 
+    @model_validator(mode="after")
+    def _validate_decision_evidence(self) -> "JudgementResponse":
+        if self.decision == "insufficient":
+            if len(self.unknown_reason.strip()) < 10:
+                raise ValueError(
+                    "insufficient judgement responses require unknown_reason"
+                )
+        elif not self.evidence_refs:
+            raise ValueError(
+                "supported or contradicted judgement responses require evidence_refs"
+            )
+        return self
+
 
 class JudgementExecution(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
