@@ -43,6 +43,17 @@ bash scripts/local_run.sh -m flow
 
 完整变量示例见 [.env.example](/Users/vyang/Desktop/spaces/audit-workpaper-agent/.env.example)。
 
+## 阶段 B 策略包试点
+
+审阅完成后，后端会在 `assets/reviews/<review_id>/` 中异步生成 Evidence-First shadow artifact。阶段 B 默认使用仓库内版本化的 `itgc-core/1.0.0` 策略包执行三条确定性规则，并写入：
+
+- `review-plan.json`：本次实际匹配的 Sheet、事实、规则和证据 ID；显式指定但不存在的 Sheet 会记录 `scope_validation_failed`，不会回退到全部 Sheet。
+- `policy-findings.json`：带规则版本、稳定 `identity_key`、`evidence_id`、逐字引用、偏移和内容哈希的阶段 B 候选。
+
+试点规则包括“仅访谈且缺少实质性证据”“标准要求的证据类型未在执行描述中体现”和“特权账号范围未覆盖 OS/DB 管理员”。这些结果暂不合并到 `findings.json` 或现有 `/findings/{review_id}` 响应，V1 结果仍是用户侧权威结果。
+
+相关配置：`REVIEW_POLICY_MODE=shadow|off`（默认 `shadow`）、`REVIEW_POLICY_PACK_ID`、`REVIEW_POLICY_PACK_VERSION`、`REVIEW_POLICY_PACK_ROOT` 和可选的 `REVIEW_ENGINE_VERSION`。策略包加载或执行失败只会将 shadow artifact 标记为 error，不会回滚或修改已完成的 V1 审阅。
+
 # Docker 部署（后端）
 
 ## 构建镜像
@@ -96,6 +107,11 @@ docker run -d \
 | `REVIEW_LLM_MODEL` | 否 | 审阅引擎 LLM 模型，默认 `doubao-seed-1-6-251015` |
 | `REVIEW_EVIDENCE_AGENT_MODE` | 否 | 受限证据调查 Agent：`off`、`fallback`、`always`；默认 `fallback` |
 | `REVIEW_EVIDENCE_AGENT_MAX_STEPS` | 否 | 单个 Sheet 的证据调查最大 Agent 步数，默认 `8` |
+| `REVIEW_POLICY_MODE` | 否 | 阶段 B 策略 shadow：`shadow` 或 `off`；默认 `shadow` |
+| `REVIEW_POLICY_PACK_ID` | 否 | 策略包 ID，默认 `itgc-core` |
+| `REVIEW_POLICY_PACK_VERSION` | 否 | 策略包版本，默认 `1.0.0` |
+| `REVIEW_POLICY_PACK_ROOT` | 否 | 策略包根目录；不设置时使用仓库内 `policy_packs/` |
+| `REVIEW_ENGINE_VERSION` | 否 | artifact 中记录的执行器版本，默认 `stage-b-policy-shadow` |
 | `MINERU_OCR_MODE` | 否 | OCR 模式：`off`（默认）、`auto`、`lightweight`、`precise`；远程处理附件前需明确开启 |
 | `MINERU_TOKEN` | `precise/auto` 时 | MinerU 精确解析 API Token；`auto` 有 Token 时优先走精确 API |
 | `MINERU_MODEL_VERSION` | 否 | 精确 API 模型，默认 `vlm` |

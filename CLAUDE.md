@@ -58,7 +58,7 @@ npm run build
   - `analyze_worksheet(file_path)` — Opens an Excel workbook, auto-detects "标准审计程序" (standard) and "执行程序" (execution) columns by scanning header rows, extracts audit program rows. Used to preview structure before a full review.
   - `review_workpaper(file_path, checkpoints_path?, attachments_dir?, sheets?)` — Async. **Starts** the full deterministic review pipeline (ported from `wpreview/analyze_excel.py`) as a **background task** via `src/review/runner.py` and returns immediately with `{review_id, status:"running", status_url, findings_url}`. `attachments_dir` is a recursively searchable directory of real evidence files; matched text-bearing files are included in the evidence/checkpoint LLM context. The review runs detached (large workpapers take tens of minutes); the frontend polls `GET /review/{review_id}/status` until `completed`, then fetches `GET /findings/{review_id}`. Starting a new review cancels any in-flight one (no stacking). The agent narrates "审阅已启动" from the running status; structured `Finding`s are written to a JSON side store (`assets/results/<review_id>_findings.json`) by the background task.
 
-- **`src/review/`** — Review engine ported from `analyze_excel.py` (async over `ChatOpenAI`, no `jsonschema`): `models` (Finding + schema), `excel_utils`, `validation` (schema validate/repair + excerpt verification), `llm` (retry/backoff/stats), `hallucination` (cross-validation + adversarial challenge), `checkpoints` (loader + checkpoint LLM review), `attachments` (directory index, text extraction, and ref matching), `evidence_steps` (evidence↔step LLM check), `procedure_pairs` (rule checks + A-C LLM judgement), `findings_review` (LLM re-review of rule findings), `pipeline` (`run_review` orchestrator), `runner` (background task + in-process registry). Tests under `tests/review/`.
+- **`src/review/`** — Review engine ported from `analyze_excel.py` (async over `ChatOpenAI`, no `jsonschema`): `models` (Finding + schema), `excel_utils`, `validation` (schema validate/repair + excerpt verification), `llm` (retry/backoff/stats), `hallucination` (cross-validation + adversarial challenge), `checkpoints` (loader + checkpoint LLM review), `attachments` (directory index, text extraction, and ref matching), `evidence_steps` (evidence↔step LLM check), `procedure_pairs` (rule checks + A-C LLM judgement), `findings_review` (LLM re-review of rule findings), `evidence` (bounded workbook snapshot), `policy` (strict JSON policy-pack loader), `planner` (Evidence Graph → ReviewPlan), `evaluators` (trusted deterministic Stage-B rules), `pipeline` (`run_review` orchestrator), `runner` (background task + in-process registry). Tests under `tests/review/`.
 
 - **`src/storage/findings_store.py`** — Side store: `save_findings`/`load_findings` to `${WORKSPACE_PATH}/assets/results/<review_id>_findings.json`.
 
@@ -97,6 +97,11 @@ npm run build
 | `REVIEW_LLM_MODEL` | Review engine LLM model (default: `doubao-seed-1-6-251015`) |
 | `REVIEW_EVIDENCE_AGENT_MODE` | Constrained evidence Agent mode: `off`, `fallback` (default), or `always` |
 | `REVIEW_EVIDENCE_AGENT_MAX_STEPS` | Maximum tool/agent recursion budget per Sheet (default: `8`) |
+| `REVIEW_POLICY_MODE` | Stage-B policy shadow mode: `shadow` (default) or `off` |
+| `REVIEW_POLICY_PACK_ID` | Stage-B policy pack ID (default: `itgc-core`) |
+| `REVIEW_POLICY_PACK_VERSION` | Stage-B policy pack version (default: `1.0.0`) |
+| `REVIEW_POLICY_PACK_ROOT` | Optional policy pack root; defaults to repository `policy_packs/` |
+| `REVIEW_ENGINE_VERSION` | Version recorded in review artifacts (default: `stage-b-policy-shadow`) |
 | `MINERU_OCR_MODE` | OCR mode: `off` (default), `auto`, `lightweight`, or `precise`; remote OCR is opt-in |
 | `MINERU_TOKEN` | MinerU precise API token, required by `precise` and preferred by `auto` |
 | `MINERU_MODEL_VERSION` | MinerU precise model, default `vlm` |
