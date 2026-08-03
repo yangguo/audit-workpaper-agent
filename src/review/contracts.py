@@ -23,6 +23,11 @@ class InputFile(BaseModel):
     )
 
 
+class PolicyPackRef(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    version: str = Field(min_length=5, max_length=40)
+
+
 class CellEvidence(BaseModel):
     evidence_id: str
     sheet_name: str
@@ -80,6 +85,7 @@ class ReviewManifest(BaseModel):
     source: str
     requested_sheets: list[str] = Field(default_factory=list)
     inputs: list[InputFile] = Field(default_factory=list)
+    policy_pack: PolicyPackRef | None = None
     engine_version: str = "stage-a-shadow"
     artifact_status: ArtifactStatus = "running"
     created_at: datetime = Field(

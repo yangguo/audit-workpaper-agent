@@ -80,6 +80,34 @@ def test_artifact_store_writes_manifest_evidence_and_v1_findings_atomically(
     assert findings["stats"]["total_findings"] == 1
 
 
+def test_artifact_store_writes_stage_b_plan_and_policy_findings_atomically(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    store = ReviewArtifactStore()
+    store.begin(_manifest("review-stage-b"))
+
+    plan = {
+        "schema_version": "stage-b-plan/1",
+        "plan_id": "plan:abc",
+        "items": [{"plan_item_id": "plan-item:1"}],
+    }
+    policy_findings = {
+        "schema_version": "stage-b-policy-findings/1",
+        "plan_id": "plan:abc",
+        "findings": [],
+    }
+
+    store.write_review_plan("review-stage-b", plan)
+    store.write_policy_findings("review-stage-b", policy_findings)
+
+    artifact_dir = tmp_path / "assets" / "reviews" / "review-stage-b"
+    assert json.loads((artifact_dir / "review-plan.json").read_text("utf-8")) == plan
+    assert json.loads(
+        (artifact_dir / "policy-findings.json").read_text("utf-8")
+    ) == policy_findings
+
+
 def test_artifact_store_marks_failure_without_marking_completed(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     store = ReviewArtifactStore()

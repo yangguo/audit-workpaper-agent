@@ -189,6 +189,20 @@ class ReviewArtifactStore:
             payload,
         )
 
+    def write_review_plan(self, review_id: str, plan: Any) -> Path:
+        """Persist the deterministic Stage-B plan as a standalone artifact."""
+        return self._atomic_write(
+            self._artifact_dir(review_id) / "review-plan.json",
+            self._to_json_payload(plan),
+        )
+
+    def write_policy_findings(self, review_id: str, payload: Any) -> Path:
+        """Persist Stage-B findings without projecting them into V1 findings."""
+        return self._atomic_write(
+            self._artifact_dir(review_id) / "policy-findings.json",
+            self._to_json_payload(payload),
+        )
+
     def complete(self, review_id: str) -> Path:
         payload = self._load_required_manifest(review_id)
         payload["artifact_status"] = "completed"

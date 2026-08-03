@@ -124,6 +124,48 @@ async def test_completed_review_starts_shadow_artifact_without_changing_v1_resul
 
 
 @pytest.mark.asyncio
+async def test_completed_review_writes_stage_b_policy_artifacts_without_changing_v1(
+    tmp_path,
+):
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    v1_payload = load_findings(review_id)
+    await _REGISTRY[review_id]["shadow_task"]
+
+    artifact_dir = tmp_path / "assets" / "reviews" / review_id
+    manifest = json.loads((artifact_dir / "manifest.json").read_text("utf-8"))
+    plan = json.loads((artifact_dir / "review-plan.json").read_text("utf-8"))
+    policy_findings = json.loads(
+        (artifact_dir / "policy-findings.json").read_text("utf-8")
+    )
+
+    assert manifest["policy_pack"] == {"id": "itgc-core", "version": "1.0.0"}
+    assert plan["schema_version"] == "stage-b-plan/1"
+    assert policy_findings["schema_version"] == "stage-b-policy-findings/1"
+    assert load_findings(review_id) == v1_payload
+    assert get_status(review_id)["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_invalid_stage_b_policy_only_fails_shadow_artifact(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("REVIEW_POLICY_PACK_ROOT", str(tmp_path / "missing-policy"))
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    v1_payload = load_findings(review_id)
+    await _REGISTRY[review_id]["shadow_task"]
+
+    status = get_status(review_id)
+    assert status["status"] == "completed"
+    assert status["artifact_status"] == "error"
+    assert "PolicyPackError" in status["artifact_error"]
+    assert load_findings(review_id) == v1_payload
+
+
+@pytest.mark.asyncio
 async def test_completed_artifact_uses_v1_input_versions_when_sources_change(
     monkeypatch, tmp_path
 ):
@@ -342,6 +384,12 @@ async def test_cancelled_shadow_capture_retains_its_original_workspace(monkeypat
             return None
 
         def write_v1_findings(self, review_id, findings, stats):
+            return None
+
+        def write_review_plan(self, review_id, plan):
+            return None
+
+        def write_policy_findings(self, review_id, payload):
             return None
 
         def complete(self, review_id):

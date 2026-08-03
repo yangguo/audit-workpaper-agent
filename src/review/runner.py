@@ -19,9 +19,12 @@ import openpyxl
 
 from review.attachments import build_attachment_index, load_attachments_preview_xlsx
 from review.checkpoints import load_checkpoints_xlsx
-from review.contracts import ReviewManifest
+from review.contracts import PolicyPackRef, ReviewManifest
 from review.evidence import build_evidence_graph, build_input_files
+from review.evaluators import execute_policy_plan
 from review.llm import LLM_CALL_STATS, get_review_llm
+from review.planner import build_review_plan
+from review.policy import load_policy_pack
 from review.pipeline import run_review
 from storage.findings_store import load_findings, save_findings
 from storage.review_artifact_store import ReviewArtifactStore
@@ -30,6 +33,16 @@ _logger = logging.getLogger("review.runner")
 
 # review_id -> {status, task, started_at, source, stats?, error?}
 _REGISTRY: Dict[str, dict] = {}
+
+
+def _stage_b_policy_config() -> tuple[str, str, str, str | None]:
+    mode = os.getenv("REVIEW_POLICY_MODE", "shadow").strip().lower()
+    if mode not in {"shadow", "off"}:
+        raise ValueError("REVIEW_POLICY_MODE must be shadow or off")
+    pack_id = os.getenv("REVIEW_POLICY_PACK_ID", "itgc-core").strip()
+    pack_version = os.getenv("REVIEW_POLICY_PACK_VERSION", "1.0.0").strip()
+    root = os.getenv("REVIEW_POLICY_PACK_ROOT", "").strip() or None
+    return mode, pack_id, pack_version, root
 
 
 def _now() -> str:
@@ -270,6 +283,11 @@ def _write_shadow_artifact(
     """Run synchronous artifact capture off the event-loop thread."""
     store = ReviewArtifactStore(workspace_path=workspace_path)
     try:
+        policy_mode, policy_id, policy_version, policy_root = _stage_b_policy_config()
+        engine_version = os.getenv(
+            "REVIEW_ENGINE_VERSION",
+            "stage-b-policy-shadow" if policy_mode == "shadow" else "stage-a-shadow",
+        ).strip()
         inputs = build_input_files(
             workpaper_path=file_path,
             checkpoints_path=checkpoints_path,
@@ -283,6 +301,12 @@ def _write_shadow_artifact(
             if sheets
             else [],
             inputs=inputs,
+            policy_pack=(
+                PolicyPackRef(id=policy_id, version=policy_version)
+                if policy_mode == "shadow"
+                else None
+            ),
+            engine_version=engine_version,
         )
         store.begin(manifest)
 
@@ -290,6 +314,22 @@ def _write_shadow_artifact(
         graph = build_evidence_graph(wb, source_sha256=inputs[0].sha256)
         store.write_evidence(review_id, graph)
         store.write_v1_findings(review_id, findings, stats)
+        if policy_mode == "shadow":
+            policy_pack = load_policy_pack(
+                pack_id=policy_id,
+                version=policy_version,
+                root=policy_root,
+            )
+            plan = build_review_plan(
+                wb,
+                graph,
+                policy_pack,
+                sheets=sheets,
+                engine_version=engine_version,
+            )
+            store.write_review_plan(review_id, plan.to_dict())
+            policy_findings = execute_policy_plan(plan, policy_pack)
+            store.write_policy_findings(review_id, policy_findings)
         store.complete(review_id)
         return None
     except Exception as e:

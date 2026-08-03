@@ -4,6 +4,7 @@ from review.contracts import (
     CellEvidence,
     EvidenceGraph,
     InputFile,
+    PolicyPackRef,
     ReviewManifest,
     SheetEvidence,
 )
@@ -30,6 +31,18 @@ def test_review_manifest_serializes_optional_inputs():
     assert payload["schema_version"] == "2.0"
     assert payload["inputs"][0]["role"] == "workpaper"
     assert payload["requested_sheets"] == ["PE-6"]
+
+
+def test_review_manifest_serializes_policy_pack_reference():
+    manifest = ReviewManifest(
+        review_id="a" * 32,
+        source="wp.xlsx",
+        policy_pack=PolicyPackRef(id="itgc-core", version="1.0.0"),
+    )
+
+    payload = manifest.model_dump(mode="json")
+
+    assert payload["policy_pack"] == {"id": "itgc-core", "version": "1.0.0"}
 
 
 def test_evidence_graph_serializes_captured_cell():
