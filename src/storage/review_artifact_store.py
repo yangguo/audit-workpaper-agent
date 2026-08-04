@@ -13,6 +13,14 @@ from review.contracts import EvidenceGraph, ReviewManifest, SCHEMA_VERSION
 
 
 _SAFE_REVIEW_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+_READABLE_ARTIFACT_FILES = frozenset(
+    {
+        "evidence.json",
+        "review-plan.json",
+        "policy-findings.json",
+        "v2-findings.json",
+    }
+)
 
 
 class ReviewArtifactStore:
@@ -239,3 +247,17 @@ class ReviewArtifactStore:
         except (OSError, json.JSONDecodeError):
             return None
         return payload if isinstance(payload, dict) else None
+
+    def load_json(self, review_id: str, filename: str) -> Any | None:
+        """Load one allow-listed JSON artifact for the read-only API view."""
+        if filename not in _READABLE_ARTIFACT_FILES:
+            raise ValueError(f"Artifact file is not readable: {filename!r}")
+        artifact_dir = self._artifact_dir(review_id).resolve()
+        path = (artifact_dir / filename).resolve()
+        if not path.is_relative_to(artifact_dir) or not path.is_file():
+            return None
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return None

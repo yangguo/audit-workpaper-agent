@@ -1,15 +1,30 @@
 "use client";
 
-import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
+import React, {
+  createContext,
+  ReactNode,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useQueryState } from "nuqs";
 import { v4 as uuidv4 } from "uuid";
-import type { FindingsPayload, UnderstoodRequirement } from "@/components/workbench/types";
+import type {
+  FindingsPayload,
+  ReviewArtifactPayload,
+  UnderstoodRequirement,
+} from "@/components/workbench/types";
 
 type Message = {
   id: string;
   type: "human" | "ai" | "tool";
   content: string;
-  tool_calls?: Array<{ name: string; id: string; args: Record<string, unknown> }>;
+  tool_calls?: Array<{
+    name: string;
+    id: string;
+    args: Record<string, unknown>;
+  }>;
 };
 
 type TaskStatus = "idle" | "running" | "completed" | "failed" | "timeout";
@@ -23,6 +38,7 @@ type StreamContextType = {
   reviewStatus: "idle" | "running" | "completed" | "error";
   reviewElapsedSeconds: number;
   findings: FindingsPayload | null;
+  artifact: ReviewArtifactPayload | null;
   understoodRequirement: UnderstoodRequirement | null;
   submit: (input?: unknown) => void;
   stop: () => void;
@@ -37,7 +53,8 @@ function contentToText(content: unknown): string {
   return content
     .map((part: any) => {
       if (!part || typeof part !== "object") return "";
-      if (part.type === "text" && typeof part.text === "string") return part.text;
+      if (part.type === "text" && typeof part.text === "string")
+        return part.text;
       if (typeof part.text === "string") return part.text;
       return "";
     })
@@ -51,8 +68,40 @@ type ReviewPollOpts = {
   signal: () => AbortSignal | undefined;
   onTick: (elapsedSeconds: number) => void;
   onCompleted: (payload: FindingsPayload) => void;
+  onArtifact: (payload: ReviewArtifactPayload) => void;
   onError: (message: string) => void;
 };
+
+async function pollReviewArtifact(opts: ReviewPollOpts): Promise<void> {
+  const intervalMs = 5000;
+  const maxPolls = 720; // 60 min ceiling for large workbooks
+  for (let i = 0; i < maxPolls; i++) {
+    const sig = opts.signal();
+    if (sig?.aborted) return;
+    try {
+      const res = await fetch(
+        `${opts.backendUrl}/review/${opts.reviewId}/artifact`,
+        {
+          signal: sig,
+        },
+      );
+      if (res.ok) {
+        const payload = (await res.json()) as ReviewArtifactPayload;
+        opts.onArtifact(payload);
+        if (
+          payload.artifact_status === "completed" ||
+          payload.artifact_status === "error"
+        ) {
+          return;
+        }
+      }
+    } catch (e) {
+      if ((e as any)?.name === "AbortError") return;
+      // A transient artifact read error should not hide the completed V1 result.
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
 
 async function pollReviewStatus(opts: ReviewPollOpts): Promise<void> {
   const intervalMs = 5000;
@@ -63,19 +112,28 @@ async function pollReviewStatus(opts: ReviewPollOpts): Promise<void> {
     await new Promise((r) => setTimeout(r, intervalMs));
     opts.onTick(i * (intervalMs / 1000));
     try {
-      const res = await fetch(`${opts.backendUrl}/review/${opts.reviewId}/status`, {
-        signal: opts.signal(),
-      });
+      const res = await fetch(
+        `${opts.backendUrl}/review/${opts.reviewId}/status`,
+        {
+          signal: opts.signal(),
+        },
+      );
       if (!res.ok) continue;
       const data = await res.json();
       if (data.status === "completed") {
-        const findingsRes = await fetch(`${opts.backendUrl}/findings/${opts.reviewId}`, {
-          signal: opts.signal(),
-        });
+        const findingsRes = await fetch(
+          `${opts.backendUrl}/findings/${opts.reviewId}`,
+          {
+            signal: opts.signal(),
+          },
+        );
         if (findingsRes.ok) {
           const payload = (await findingsRes.json()) as FindingsPayload;
           if (payload && payload.findings) opts.onCompleted(payload);
         }
+        // V1 is complete before the shadow artifact is necessarily ready.
+        // Keep the artifact read independent so the existing result is immediate.
+        void pollReviewArtifact(opts);
         return;
       }
       if (data.status === "error") {
@@ -101,7 +159,9 @@ function buildUserMessageText(messages: Message[]): string {
   return contentToText((lastHuman as any).content);
 }
 
-export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export const StreamProvider: React.FC<{ children: ReactNode }> = ({
+  children,
+}) => {
   const [threadId, setThreadId] = useQueryState("threadId");
   const [sessionId, setSessionId] = useState<string>(() => threadId || "");
 
@@ -121,9 +181,13 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [taskStatus, setTaskStatus] = useState<TaskStatus>("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [findings, setFindings] = useState<FindingsPayload | null>(null);
-  const [reviewStatus, setReviewStatus] = useState<"idle" | "running" | "completed" | "error">("idle");
+  const [artifact, setArtifact] = useState<ReviewArtifactPayload | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<
+    "idle" | "running" | "completed" | "error"
+  >("idle");
   const [reviewElapsedSeconds, setReviewElapsedSeconds] = useState(0);
-  const [understoodRequirement, setUnderstoodRequirement] = useState<UnderstoodRequirement | null>(null);
+  const [understoodRequirement, setUnderstoodRequirement] =
+    useState<UnderstoodRequirement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const reviewAbortRef = useRef<AbortController | null>(null);
 
@@ -139,7 +203,9 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const submit: StreamContextType["submit"] = async (input) => {
     const maybeMessages = (input as any)?.messages;
-    const nextMessages: Message[] = Array.isArray(maybeMessages) ? maybeMessages : messages;
+    const nextMessages: Message[] = Array.isArray(maybeMessages)
+      ? maybeMessages
+      : messages;
     const text = buildUserMessageText(nextMessages);
     if (!text.trim()) return;
 
@@ -152,6 +218,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setTaskStatus("running");
     setElapsedSeconds(0);
     setFindings(null);
+    setArtifact(null);
     setReviewStatus("idle");
     setReviewElapsedSeconds(0);
     setUnderstoodRequirement(null);
@@ -163,7 +230,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const sid = sessionId || threadId || uuidv4();
       if (!threadId) setThreadId(sid);
       if (!sessionId) setSessionId(sid);
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+      const backendUrl =
+        process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
       const aiId = uuidv4();
       const placeholderAi: Message = { id: aiId, type: "ai", content: "" };
       setMessages((prev) => [...prev, placeholderAi]);
@@ -197,7 +265,9 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
 
       setMessages((prev) =>
-        prev.map((m) => (m.id === aiId ? { ...m, content: "正在分析底稿…" } : m)),
+        prev.map((m) =>
+          m.id === aiId ? { ...m, content: "正在分析底稿…" } : m,
+        ),
       );
 
       // Poll for result
@@ -225,7 +295,9 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // Surface the understood review requirement as soon as the agent has
         // called review_workpaper — even while the task is still processing.
         if (pollData?.review_summary) {
-          setUnderstoodRequirement(pollData.review_summary as UnderstoodRequirement);
+          setUnderstoodRequirement(
+            pollData.review_summary as UnderstoodRequirement,
+          );
         }
 
         if (pollData.status === "completed") {
@@ -243,7 +315,9 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // Update placeholder with progress indicator
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === aiId ? { ...m, content: `正在分析底稿… (${pollCount * 2}s)` } : m,
+            m.id === aiId
+              ? { ...m, content: `正在分析底稿… (${pollCount * 2}s)` }
+              : m,
           ),
         );
       }
@@ -256,15 +330,18 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // If review_workpaper started a background review, poll its status
         if (reviewId && reviewSummary?.status === "running") {
           setReviewStatus("running");
+          const reviewAbort = new AbortController();
+          reviewAbortRef.current = reviewAbort;
           await pollReviewStatus({
             backendUrl,
             reviewId,
-            signal: () => reviewAbortRef.current?.signal,
+            signal: () => reviewAbort.signal,
             onTick: (secs) => setReviewElapsedSeconds(secs),
             onCompleted: (payload) => {
               setFindings(payload);
               setReviewStatus("completed");
             },
+            onArtifact: (payload) => setArtifact(payload),
             onError: (msg) => {
               setError(msg);
               setReviewStatus("error");
@@ -282,6 +359,14 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             })
             .catch(() => {
               // structured findings are optional; Markdown narrative still shows
+            });
+          fetch(`${backendUrl}/review/${reviewId}/artifact`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: ReviewArtifactPayload | null) => {
+              if (data) setArtifact(data);
+            })
+            .catch(() => {
+              // V1 findings remain usable when artifacts are unavailable.
             });
         }
       } else {
@@ -310,17 +395,21 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     reviewStatus,
     reviewElapsedSeconds,
     findings,
+    artifact,
     understoodRequirement,
     submit,
     stop,
   };
 
-  return <StreamContext.Provider value={value}>{children}</StreamContext.Provider>;
+  return (
+    <StreamContext.Provider value={value}>{children}</StreamContext.Provider>
+  );
 };
 
 export const useStreamContext = (): StreamContextType => {
   const context = useContext(StreamContext);
-  if (!context) throw new Error("useStreamContext must be used within a StreamProvider");
+  if (!context)
+    throw new Error("useStreamContext must be used within a StreamProvider");
   return context;
 };
 

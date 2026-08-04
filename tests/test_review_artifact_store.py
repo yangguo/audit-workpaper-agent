@@ -146,6 +146,19 @@ def test_artifact_store_marks_failure_without_marking_completed(monkeypatch, tmp
     assert manifest["artifact_error"] == "RuntimeError: boom"
 
 
+def test_artifact_store_load_json_is_allowlisted_and_tolerates_missing_files(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    store = ReviewArtifactStore()
+
+    store.begin(_manifest("review-read"))
+
+    assert store.load_json("review-read", "evidence.json") is None
+    with pytest.raises(ValueError, match="not readable"):
+        store.load_json("review-read", "manifest.json")
+
+
 def test_snapshot_inputs_preserves_attachment_directory_structure(tmp_path):
     source = tmp_path / "uploads" / "attachments"
     (source / "SA-4c").mkdir(parents=True)

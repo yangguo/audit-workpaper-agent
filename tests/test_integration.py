@@ -107,6 +107,7 @@ async def test_review_workpaper_tool_starts_background_review(monkeypatch, tmp_p
     assert result["status"] == "running"
     assert result["status_url"] == f"/review/{result['review_id']}/status"
     assert result["findings_url"] == f"/findings/{result['review_id']}"
+    assert result["artifact_url"] == f"/review/{result['review_id']}/artifact"
 
     # background task eventually completes and writes findings
     await _REGISTRY[result["review_id"]]["task"]

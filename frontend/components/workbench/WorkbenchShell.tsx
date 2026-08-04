@@ -7,6 +7,7 @@ import { AnalysisResultPanel } from "./AnalysisResultPanel";
 import { ProgressStatusPanel } from "./ProgressStatusPanel";
 import { ToolTracePanel } from "./ToolTracePanel";
 import { UnderstoodRequirementPanel } from "./UnderstoodRequirementPanel";
+import { ReviewArtifactPanel } from "./ReviewArtifactPanel";
 import type {
   AnalysisSection,
   EvidenceItem,
@@ -14,6 +15,7 @@ import type {
   SummaryMetric,
   ToolTrace,
   UnderstoodRequirement,
+  ReviewArtifactPayload,
 } from "./types";
 
 export function WorkbenchShell(props: {
@@ -29,6 +31,7 @@ export function WorkbenchShell(props: {
   progressSteps: ProgressStep[];
   toolTraces: ToolTrace[];
   understoodRequirement?: UnderstoodRequirement | null;
+  artifact?: ReviewArtifactPayload | null;
   isEmpty: boolean;
   errorMessage?: string;
   runningMessage?: string;
@@ -42,7 +45,7 @@ export function WorkbenchShell(props: {
         statusLabel={props.header.statusLabel}
         action={props.header.action}
       />
-      <div className="mx-auto grid w-full max-w-[1320px] min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[320px_minmax(0,1fr)_320px]">
+      <div className="mx-auto grid min-h-0 w-full max-w-[1320px] flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[320px_minmax(0,1fr)_320px]">
         <aside className="space-y-4">
           {props.intake ?? (
             <section className="rounded-2xl border bg-white p-4">
@@ -53,9 +56,14 @@ export function WorkbenchShell(props: {
         </aside>
         <main className="space-y-4">
           {props.understoodRequirement ? (
-            <UnderstoodRequirementPanel requirement={props.understoodRequirement} />
+            <UnderstoodRequirementPanel
+              requirement={props.understoodRequirement}
+            />
           ) : null}
           <ResultSummaryCards items={props.summaryMetrics} />
+          {props.artifact ? (
+            <ReviewArtifactPanel artifact={props.artifact} />
+          ) : null}
           {props.isEmpty ? (
             <EmptyStatePanel />
           ) : (

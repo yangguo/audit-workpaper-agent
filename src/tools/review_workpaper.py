@@ -35,7 +35,8 @@ async def review_workpaper(
 
     本工具立即返回 review_id 与 status="running"，审阅在后台进行（大底稿可能耗时数十分钟）。
     前端通过 GET /review/{review_id}/status 轮询进度，status="completed" 后用
-    GET /findings/{review_id} 获取完整结构化 findings。
+    GET /findings/{review_id} 获取完整结构化 findings，GET
+    /review/{review_id}/artifact 查看 Evidence-First 阶段产物。
 
     Args:
         file_path: 底稿 Excel 路径（相对于 assets 目录或绝对路径）
@@ -45,7 +46,8 @@ async def review_workpaper(
         sheets: 指定要审阅的 Sheet（即控制点，逗号分隔，可选，留空=全部）。用户指定控制点范围时必须传入对应 Sheet 名（底稿 Tab 名）；若用户用描述性说法而非 Sheet 名，应先调用 analyze_worksheet 映射到确切 Sheet 名后再传入
 
     Returns:
-        JSON 字符串，含 review_id、status="running"、status_url、findings_url。
+        JSON 字符串，含 review_id、status="running"、status_url、findings_url
+        和 artifact_url。
     """
     workspace_path = os.getenv("WORKSPACE_PATH", os.getcwd())
     full_path = _resolve_path(workspace_path, file_path)
@@ -85,7 +87,8 @@ async def review_workpaper(
             "status": "running",
             "status_url": f"/review/{review_id}/status",
             "findings_url": f"/findings/{review_id}",
-            "message": "审阅已在后台启动。请轮询 status_url 直到 status=completed，再通过 findings_url 获取结构化结果。大底稿可能耗时数十分钟。",
+            "artifact_url": f"/review/{review_id}/artifact",
+            "message": "审阅已在后台启动。请轮询 status_url 直到 status=completed，再通过 findings_url 获取结构化结果；同时可通过 artifact_url 查看 Evidence-First 阶段产物。大底稿可能耗时数十分钟。",
         }, ensure_ascii=False, indent=2)
 
     except Exception as e:

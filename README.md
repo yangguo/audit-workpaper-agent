@@ -67,6 +67,12 @@ bash scripts/local_run.sh -m flow
 
 相关配置：`REVIEW_JUDGEMENT_MODE=shadow|off`（默认 `off`）、`REVIEW_JUDGEMENT_PACK_ID`、`REVIEW_JUDGEMENT_PACK_VERSION`、可选的 `REVIEW_JUDGEMENT_PACK_ROOT` 和 `REVIEW_JUDGEMENT_MAX_REQUESTS`。未设置 `REVIEW_JUDGEMENT_PACK_ROOT` 时，会复用 `REVIEW_POLICY_PACK_ROOT`，再回退到仓库内 `policy_packs/`。
 
+## Workbench 中查看阶段结果
+
+审阅结果页会在 V1 结果返回后继续轮询 `GET /review/{review_id}/artifact`，并在“Evidence-First 过程”面板中展示：阶段 A 的输入快照、阶段 B 的规则候选、阶段 C 的受限判断，以及每条候选对应的 Sheet/单元格和逐字证据摘录。阶段面板是只读 shadow 视图，不会替换 V1 结果；阶段 C 未配置时会明确显示“未启用”。
+
+工具返回值同时提供 `artifact_url`，便于 CLI 或其他客户端读取同一份受限视图。
+
 # Docker 部署（后端）
 
 ## 构建镜像

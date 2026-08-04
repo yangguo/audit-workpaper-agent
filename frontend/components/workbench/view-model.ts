@@ -104,22 +104,11 @@ function findingsToSections(findings: Finding[]): AnalysisSection[] {
   for (const sev of ["P0", "P1", "P2"]) {
     const list = groups[sev];
     if (!list || list.length === 0) continue;
-    const body = list
-      .map((f, i) => {
-        const loc = [f.sheet, f.cell].filter(Boolean).join("!");
-        const conclusion = f.llm_conclusion || f.conclusion || f.issue_type;
-        const refs = (f.evidence_refs || [])
-          .map((r) => r.attachment || r.cell_or_range || "")
-          .filter(Boolean)
-          .join(", ");
-        const lines = [`**${i + 1}. ${f.issue_type}**${loc ? ` (${loc})` : ""}`, conclusion || ""];
-        if (f.basis) lines.push(`依据: ${f.basis}`);
-        if (f.suggestion) lines.push(`建议: ${f.suggestion}`);
-        if (refs) lines.push(`证据: ${refs}`);
-        return lines.filter(Boolean).join("\n");
-      })
-      .join("\n\n");
-    sections.push({ title: `${SEVERITY_TITLES[sev] || sev}（${list.length}）`, body });
+    sections.push({
+      title: `${SEVERITY_TITLES[sev] || sev}（${list.length}）`,
+      body: "",
+      findings: list,
+    });
   }
   return sections;
 }
@@ -171,11 +160,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
     { label: "准备材料", status: "completed" },
     {
       label: "分析底稿",
-      status: input.isLoading
-        ? "active"
-        : input.error
-          ? "failed"
-          : "completed",
+      status: input.isLoading ? "active" : input.error ? "failed" : "completed",
     },
     {
       label: "生成结论",
@@ -212,7 +197,9 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
     }));
     return {
       status,
-      evidenceItems: uploaded.concat(findingsToEvidence(input.findings.findings)),
+      evidenceItems: uploaded.concat(
+        findingsToEvidence(input.findings.findings),
+      ),
       summaryMetrics,
       analysisSections,
       progressSteps,
@@ -225,8 +212,12 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
   }
 
   // Markdown fallback (no structured findings)
-  const analysisSections = latestAi?.content ? splitSections(latestAi.content) : [];
-  const anomalyCount = latestAi?.content ? extractAnomalyCount(latestAi.content) : "0";
+  const analysisSections = latestAi?.content
+    ? splitSections(latestAi.content)
+    : [];
+  const anomalyCount = latestAi?.content
+    ? extractAnomalyCount(latestAi.content)
+    : "0";
   const toolTraces: ToolTrace[] = (latestAi?.tool_calls ?? []).map((call) => ({
     id: call.id,
     name: call.name,

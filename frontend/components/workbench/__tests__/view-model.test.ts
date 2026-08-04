@@ -7,15 +7,30 @@ describe("buildWorkbenchViewModel", () => {
       status: "completed",
       archiveUrl: "https://example.com/audit.zip",
       contentBlocks: [
-        { type: "text", text: "Workbook.xlsx", metadata: { name: "Workbook.xlsx" } },
-        { type: "text", text: "Evidence.pdf", metadata: { name: "Evidence.pdf" } },
+        {
+          type: "text",
+          text: "Workbook.xlsx",
+          metadata: { name: "Workbook.xlsx" },
+        },
+        {
+          type: "text",
+          text: "Evidence.pdf",
+          metadata: { name: "Evidence.pdf" },
+        },
       ],
       messages: [
         {
           id: "ai-1",
           type: "ai",
-          content: "## 结论摘要\n存在 3 个异常点\n\n## 建议动作\n复核收入截止测试",
-          tool_calls: [{ id: "tool-1", name: "analyze_worksheet", args: { file_path: "assets/uploads/a.xlsx" } }],
+          content:
+            "## 结论摘要\n存在 3 个异常点\n\n## 建议动作\n复核收入截止测试",
+          tool_calls: [
+            {
+              id: "tool-1",
+              name: "analyze_worksheet",
+              args: { file_path: "assets/uploads/a.xlsx" },
+            },
+          ],
         },
       ],
       isLoading: false,
@@ -24,8 +39,13 @@ describe("buildWorkbenchViewModel", () => {
     });
 
     expect(model.evidenceItems).toHaveLength(3);
-    expect(model.summaryMetrics.find((item) => item.label === "异常项")?.value).toBe("3");
-    expect(model.analysisSections.map((section) => section.title)).toEqual(["结论摘要", "建议动作"]);
+    expect(
+      model.summaryMetrics.find((item) => item.label === "异常项")?.value,
+    ).toBe("3");
+    expect(model.analysisSections.map((section) => section.title)).toEqual([
+      "结论摘要",
+      "建议动作",
+    ]);
     expect(model.progressSteps.at(-1)?.status).toBe("completed");
     expect(model.toolTraces[0]?.name).toBe("analyze_worksheet");
   });
@@ -42,7 +62,9 @@ describe("buildWorkbenchViewModel", () => {
     });
 
     expect(failed.status).toBe("failed");
-    expect(failed.progressSteps.some((step) => step.status === "failed")).toBe(true);
+    expect(failed.progressSteps.some((step) => step.status === "failed")).toBe(
+      true,
+    );
     expect(failed.errorMessage).toBe("分析失败，请检查输入材料后重试。");
   });
 
@@ -93,14 +115,24 @@ describe("buildWorkbenchViewModel", () => {
 
     expect(model.summaryMetrics.find((m) => m.label === "P0")?.value).toBe("1");
     expect(model.summaryMetrics.find((m) => m.label === "P1")?.value).toBe("1");
-    expect(model.summaryMetrics.find((m) => m.label === "总计")?.value).toBe("2");
+    expect(model.summaryMetrics.find((m) => m.label === "总计")?.value).toBe(
+      "2",
+    );
     const titles = model.analysisSections.map((s) => s.title);
     expect(titles).toContain("P0 高风险问题（1）");
     expect(titles).toContain("P1 中风险问题（1）");
+    expect(
+      model.analysisSections.find((section) => section.title.startsWith("P0"))
+        ?.findings?.[0]?.issue_type,
+    ).toBe("执行列疑似未替换模板");
     // evidence_ref surfaced in the evidence list
-    expect(model.evidenceItems.some((e) => e.name.includes("SA-4c"))).toBe(true);
+    expect(model.evidenceItems.some((e) => e.name.includes("SA-4c"))).toBe(
+      true,
+    );
     // llm_call_stats surfaced as tool traces
-    expect(model.toolTraces.some((t) => t.name.startsWith("checkpoints"))).toBe(true);
+    expect(model.toolTraces.some((t) => t.name.startsWith("checkpoints"))).toBe(
+      true,
+    );
   });
 
   it("passes the understood requirement through to the view model", () => {
@@ -113,7 +145,8 @@ describe("buildWorkbenchViewModel", () => {
       checkpoints: "检查要点.xlsx",
       attachments_dir: "dir-1",
       attachments_preview: null,
-      summary: "将审阅 PE-6（底稿：C22 IT一般控制测试2025v5.xlsx，含检查要点：检查要点.xlsx）",
+      summary:
+        "将审阅 PE-6（底稿：C22 IT一般控制测试2025v5.xlsx，含检查要点：检查要点.xlsx）",
     };
     const model = buildWorkbenchViewModel({
       status: "running",

@@ -21,7 +21,9 @@ from api.upload import router as upload_router
 from langchain_core.runnables import RunnableConfig
 
 from review.runner import get_status as get_review_status
+from review.artifact_view import build_artifact_view
 from storage.findings_store import load_findings
+from storage.review_artifact_store import ReviewArtifactStore
 from utils.context import Context, request_context, new_context
 
 _log_dir = os.path.join(os.getcwd(), "logs")
@@ -453,6 +455,26 @@ async def review_status(review_id: str):
             "stats": payload.get("stats"),
         }
     raise HTTPException(status_code=404, detail="review not found")
+
+
+@app.get("/review/{review_id}/artifact")
+async def review_artifact(review_id: str):
+    """Return a bounded, read-only view of the Evidence-First artifacts."""
+    store = ReviewArtifactStore()
+    try:
+        manifest = store.load_manifest(review_id)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail="review artifact not found")
+        return build_artifact_view(
+            review_id=review_id,
+            manifest=manifest,
+            evidence=store.load_json(review_id, "evidence.json"),
+            plan=store.load_json(review_id, "review-plan.json"),
+            policy_findings=store.load_json(review_id, "policy-findings.json"),
+            v2_findings=store.load_json(review_id, "v2-findings.json"),
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="review artifact not found")
 
 
 @app.get("/health")

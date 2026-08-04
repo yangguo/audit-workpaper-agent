@@ -81,7 +81,10 @@ export function Thread() {
 
     let text = parts.join("\n");
     if (uploadedPaths.length > 0) {
-      const suffix = ["已上传文件路径：", ...uploadedPaths.map((p) => `- ${p}`)].join("\n");
+      const suffix = [
+        "已上传文件路径：",
+        ...uploadedPaths.map((p) => `- ${p}`),
+      ].join("\n");
       text = text ? `${text}\n${suffix}` : suffix;
     }
     if (attachmentsDirPath) {
@@ -108,7 +111,8 @@ export function Thread() {
         console.error("File upload failed:", error);
         const message = error instanceof Error ? error.message : String(error);
         const isConnectionError =
-          message.includes("Failed to fetch") || message.includes("NetworkError");
+          message.includes("Failed to fetch") ||
+          message.includes("NetworkError");
         toast.error(
           isConnectionError ? "无法连接后端服务" : "文件上传失败，请重试",
           {
@@ -123,12 +127,15 @@ export function Thread() {
 
     if (attachmentDirectoryFiles.length > 0) {
       try {
-        attachmentsDirPath = await uploadAttachmentDirectory(attachmentDirectoryFiles);
+        attachmentsDirPath = await uploadAttachmentDirectory(
+          attachmentDirectoryFiles,
+        );
       } catch (error) {
         console.error("Attachment directory upload failed:", error);
         const message = error instanceof Error ? error.message : String(error);
         const isConnectionError =
-          message.includes("Failed to fetch") || message.includes("NetworkError");
+          message.includes("Failed to fetch") ||
+          message.includes("NetworkError");
         toast.error(
           isConnectionError ? "无法连接后端服务" : "附件目录上传失败，请重试",
           {
@@ -144,7 +151,11 @@ export function Thread() {
     const text = buildMessageText(uploadedPaths, attachmentsDirPath);
     if ((!text.trim() && contentBlocks.length === 0) || isLoading) return;
 
-    const msgContent: Array<{ type: string; text?: string; metadata?: { name: string } }> = [];
+    const msgContent: Array<{
+      type: string;
+      text?: string;
+      metadata?: { name: string };
+    }> = [];
 
     if (text.trim()) {
       msgContent.push({ type: "text", text: text.trim() });
@@ -207,7 +218,7 @@ export function Thread() {
       ref={dropRef}
       className={cn(
         "flex h-screen w-full flex-col overflow-hidden transition-colors",
-        dragOver && "ring-2 ring-primary ring-inset",
+        dragOver && "ring-primary ring-2 ring-inset",
       )}
     >
       <WorkbenchShell
@@ -237,6 +248,7 @@ export function Thread() {
         progressSteps={model.progressSteps}
         toolTraces={model.toolTraces}
         understoodRequirement={model.understoodRequirement}
+        artifact={stream.artifact}
         isEmpty={isEmpty}
         errorMessage={model.errorMessage}
         runningMessage={model.runningMessage}
