@@ -213,6 +213,9 @@ async def run_review(
                 llm=llm, ws_title=sheet, ws=ws,
                 checkpoints=checkpoints[sheet],
                 attachments=attachments or None,
+                on_progress=lambda stage, msg: _emit_progress(
+                    on_progress, "checkpoints", sheet, findings, msg,
+                ),
             )
         _emit_progress(on_progress, "checkpoints", sheet, findings, f"完成 {sheet} checkpoint 评审")
         # 2) attachment-reference matching

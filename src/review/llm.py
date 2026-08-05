@@ -81,8 +81,8 @@ async def _llm_chat(
     llm,
     messages: List[Dict[str, str]],
     stage: str,
-    max_attempts: int = 3,
-    max_tokens: int = 2048,
+    max_attempts: int = 2,
+    max_tokens: int = 4096,
 ) -> str:
     """Call the LLM with retry/backoff. Returns the response content string."""
     lc_messages = _to_langchain_messages(messages)
@@ -92,6 +92,11 @@ async def _llm_chat(
         try:
             _llm_stat(stage, "calls", 1)
             resp = await bound.ainvoke(lc_messages)
+            # Surface truncation as an exception so the outer retry loop counts
+            # it against max_attempts instead of silently returning half-JSON.
+            finish_reason = getattr(resp, "response_metadata", {}).get("finish_reason")
+            if finish_reason == "length":
+                raise RuntimeError(f"LLM响应被max_tokens截断 (finish_reason=length)")
             content = resp.content if hasattr(resp, "content") else str(resp)
             if isinstance(content, list):
                 content = " ".join(
@@ -135,7 +140,7 @@ async def _llm_request_json_list(
     system_prompt: str,
     user_prompt: str,
     stage: str,
-    max_attempts: int = 3,
+    max_attempts: int = 2,
 ) -> Tuple[Optional[List[Any]], Optional[str]]:
     """Call the LLM expecting a JSON list response ({results: [...]}).
 
@@ -165,7 +170,7 @@ async def _llm_request_json_list(
                 ]
             content = await _llm_chat(
                 llm=llm, messages=current_messages, stage=stage,
-                max_attempts=3, max_tokens=2048,
+                max_attempts=2, max_tokens=4096,
             )
             parsed = _try_parse_json(content)
             if isinstance(parsed, dict):
@@ -205,6 +210,13 @@ def get_review_llm() -> ChatOpenAI:
     api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     model = os.getenv("REVIEW_LLM_MODEL", "doubao-seed-1-6-251015")
+    # Force JSON-mode output when the provider supports it. Both DeepSeek and
+    # ARK's OpenAI-compatible endpoints accept response_format={"type":"json_object"}.
+    # Set REVIEW_LLM_JSON_MODE=0 to disable for providers that don't.
+    json_mode = os.getenv("REVIEW_LLM_JSON_MODE", "1") != "0"
+    kwargs = {}
+    if json_mode:
+        kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
     return ChatOpenAI(
         model=model,
         api_key=api_key,
@@ -212,4 +224,5 @@ def get_review_llm() -> ChatOpenAI:
         temperature=0.1,
         max_retries=0,
         streaming=False,
+        **kwargs,
     )

@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 import openpyxl
 from openpyxl.utils import get_column_letter
@@ -109,9 +109,10 @@ async def _llm_check_sheet_by_checkpoints(
     ws,
     checkpoints: Sequence[str],
     attachments: Optional[Dict[str, object]] = None,
-    batch_size: int = 6,
+    batch_size: int = 4,
     sleep_seconds: float = 0.2,
     attachments_preview: Optional[Dict[str, object]] = None,
+    on_progress: Optional[Callable[[str, str], None]] = None,
 ) -> List[Finding]:
     if not checkpoints:
         return []
@@ -173,15 +174,8 @@ async def _llm_check_sheet_by_checkpoints(
         "  * excerpt不可编造，必须是sheet_text中能找到的原句片段\n"
         "- severity: \"P0\"/\"P1\"/\"P2\"（当status!=pass时必填）\n"
         "- risk_type: \"覆盖性\"/\"一致性\"/\"证据不足\"/\"方法性\"/\"逻辑性\"/\"跨字段一致性\"之一\n"
-        "- fix_suggestion: 对象，含 {missing_field, supplement_explanation, required_evidence_type}，说明缺什么/补什么/要哪类证据\n"
-        "- unknown_reason: 当status=unknown时必填，≥10字符，说明缺少什么信息\n"
-        "向后兼容字段（可同时输出，但以新字段为准）：\n"
-        "- basis: 字符串（可执行整改建议，保留旧版兼容）\n"
-        "- suggestion: 字符串（保留旧版兼容）\n"
-        "- issue_type: 字符串（保留旧版兼容）\n"
-        "- related_cells: 字符串数组（保留旧版兼容，转换到evidence_refs）\n"
-        "- missing_evidence: 字符串数组（保留旧版兼容，转换到fix_suggestion.required_evidence_type）\n"
-        "不要输出Markdown代码块，不要输出多余文字。"
+        "- fix_suggestion: 对象，含 {supplement_explanation}\n"
+        "- unknown_reason: status=unknown时必填，≥10字符\n"
     )
 
     findings: List[Finding] = []
@@ -403,7 +397,7 @@ async def _llm_check_sheet_by_checkpoints(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             stage=stage,
-            max_attempts=3,
+            max_attempts=2,
         )
         if parsed is not None:
             _consume_results(parsed)
@@ -420,7 +414,7 @@ async def _llm_check_sheet_by_checkpoints(
                     user_prompt1 = "请按要求逐条复核以下检查要点：\n" + json.dumps(payload1, ensure_ascii=False, indent=2)
                     parsed1, err1 = await _llm_request_json_list(
                         llm=llm, system_prompt=system_prompt, user_prompt=user_prompt1,
-                        stage=stage, max_attempts=3,
+                        stage=stage, max_attempts=2,
                     )
                     if parsed1 is not None:
                         _consume_results(parsed1)
@@ -431,6 +425,15 @@ async def _llm_check_sheet_by_checkpoints(
 
         if sleep_seconds and sleep_seconds > 0:
             await asyncio.sleep(float(sleep_seconds))
+
+        # Emit intra-chunk progress so long stages don't appear frozen.
+        # Best-effort: callbacks must not break the review.
+        if on_progress is not None:
+            try:
+                msg = f"已处理 {min(end, len(deduped))} / {len(deduped)} 个检查要点"
+                on_progress(stage, msg)
+            except Exception:
+                pass
 
     return findings
 
