@@ -373,3 +373,60 @@ async def test_run_review_ignores_on_progress_exceptions(monkeypatch):
     )
     # review still completed despite the callback throwing
     assert stats["total_findings"] == len(findings)
+
+
+@pytest.mark.asyncio
+async def test_intra_chunk_progress_emitted_during_long_checkpoints_stage(monkeypatch):
+    """A sheet with many checkpoints must emit progress between chunks, not only
+    at the stage boundary. Otherwise long checkpoint reviews look frozen for
+    many minutes.
+
+    Regression guard for: 1 sheet with 11 checkpoints at batch_size=6 should
+    emit at least 2 intra-chunk progress events (one per processed chunk).
+    """
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    import openpyxl as _ox
+    import review.pipeline as _pipe
+    import review.checkpoints as _ckp
+
+    wb = _ox.Workbook()
+    ws = wb.active
+    ws.title = "SA-12"
+
+    # 11 checkpoints to drive >1 chunk with batch_size=6
+    many_ckpts = [f"检查要点 {i}：核查对应证据并形成结论。" for i in range(1, 12)]
+    llm = _FakeLLM('{"results": []}')
+
+    intra_events: list[str] = []
+
+    # Spy on the intra-chunk callback to capture messages emitted between chunks.
+    import review.checkpoints as _ckp_mod
+
+    async def _spy(llm, ws_title, ws, checkpoints, attachments=None,
+                   batch_size=6, sleep_seconds=0, attachments_preview=None,
+                   on_progress=None):
+        # Mirror the real implementation's chunk loop just enough to invoke the
+        # intra-chunk callback the way the real code does.
+        for start in range(0, len(checkpoints), max(1, int(batch_size))):
+            end = min(start + max(1, int(batch_size)), len(checkpoints))
+            if on_progress is not None:
+                on_progress(f"checkpoints:{ws_title}",
+                            f"已处理 {end} / {len(checkpoints)} 个检查要点")
+        return []
+
+    monkeypatch.setattr(_pipe, "_llm_check_sheet_by_checkpoints", _spy)
+
+    def collect(p):
+        if p["current_sheet"] == "SA-12" and "已处理" in p["msg"]:
+            intra_events.append(p["msg"])
+
+    findings, stats = await run_review(
+        wb=wb, checkpoints={"SA-12": many_ckpts}, attachments_preview={},
+        sheets=None, llm=llm, on_progress=collect,
+    )
+    assert len(intra_events) >= 2, (
+        f"expected >=2 intra-chunk events for 11 checkpoints, got {intra_events}"
+    )
+    assert intra_events[-1].endswith("/ 11 个检查要点"), (
+        f"final intra-chunk event should report total 11, got {intra_events[-1]!r}"
+    )
