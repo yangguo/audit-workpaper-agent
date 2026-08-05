@@ -15,8 +15,16 @@ def _is_empty(value) -> bool:
 
 
 def _get_cell_value(ws, cell_ref: str) -> Optional[str]:
-    """Get a cell value, resolving merged-cell anchors to the top-left value."""
-    cell = ws[cell_ref]
+    """Get a cell value, resolving merged-cell anchors to the top-left value.
+
+    Returns None for an empty cell or a malformed coordinate (e.g. an
+    LLM-returned cell_or_range that isn't a real Excel reference), so a
+    bad reference never crashes the review.
+    """
+    try:
+        cell = ws[cell_ref]
+    except (KeyError, ValueError):
+        return None
     value = cell.value
     if value is None and ws.merged_cells.ranges:
         for merged_range in ws.merged_cells.ranges:

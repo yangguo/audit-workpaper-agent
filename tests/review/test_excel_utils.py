@@ -35,6 +35,13 @@ def test_get_cell_value_empty_returns_none(layout_workbook):
     assert _get_cell_value(ws, "Z9") is None
 
 
+def test_get_cell_value_invalid_ref_returns_none(layout_workbook):
+    """An LLM-returned cell_or_range that isn't a real coordinate must not crash the review."""
+    ws = layout_workbook.active
+    assert _get_cell_value(ws, "sheet名") is None
+    assert _get_cell_value(ws, "not a cell") is None
+
+
 def test_get_cell_text_strips_constructed_marker(layout_workbook):
     ws = layout_workbook.active
     ws["A2"] = "用户清单"
