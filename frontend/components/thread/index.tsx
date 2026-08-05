@@ -198,6 +198,7 @@ export function Thread() {
     findings: stream.findings,
     reviewStatus: stream.reviewStatus,
     reviewElapsedSeconds: stream.reviewElapsedSeconds,
+    reviewProgress: stream.reviewProgress,
     understoodRequirement: stream.understoodRequirement,
   });
 
@@ -247,6 +248,7 @@ export function Thread() {
         evidenceItems={model.evidenceItems}
         progressSteps={model.progressSteps}
         toolTraces={model.toolTraces}
+        liveProgress={model.liveProgress}
         understoodRequirement={model.understoodRequirement}
         artifact={stream.artifact}
         isEmpty={isEmpty}

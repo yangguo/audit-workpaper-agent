@@ -174,4 +174,43 @@ describe("buildWorkbenchViewModel", () => {
     });
     expect(model.understoodRequirement).toBeNull();
   });
+
+  it("shows total elapsed time and live progress while review is running", () => {
+    const model = buildWorkbenchViewModel({
+      status: "running",
+      archiveUrl: "",
+      contentBlocks: [],
+      messages: [],
+      isLoading: false,
+      elapsedSeconds: 6,
+      reviewStatus: "running",
+      reviewElapsedSeconds: 120,
+      reviewProgress: {
+        stage: "checkpoints",
+        current_sheet: "SA-9",
+        llm_calls: { checkpoints: 3 },
+        findings_so_far: { P0: 0, P1: 1, P2: 2, total: 3 },
+        recent_events: [{ t: "10:00:00", msg: "完成 SA-9 checkpoint 评审" }],
+        updated_at: "2026-08-05T10:00:00",
+      },
+      error: null,
+    });
+    const metric = model.summaryMetrics.find((m) => m.label === "处理耗时");
+    expect(metric?.value).toBe("126s");
+    expect(model.liveProgress?.stage).toBe("checkpoints");
+    expect(model.liveProgress?.findings_so_far.total).toBe(3);
+  });
+
+  it("does not surface live progress when review is not running", () => {
+    const model = buildWorkbenchViewModel({
+      status: "completed",
+      archiveUrl: "",
+      contentBlocks: [],
+      messages: [],
+      isLoading: false,
+      elapsedSeconds: 42,
+      error: null,
+    });
+    expect(model.liveProgress).toBeUndefined();
+  });
 });

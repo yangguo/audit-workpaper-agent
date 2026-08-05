@@ -6,7 +6,7 @@ import dataclasses
 import json
 import logging
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import openpyxl
 
@@ -32,6 +32,31 @@ from review.procedure_pairs import (
 _logger = logging.getLogger("review.pipeline")
 
 _SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
+
+
+def _emit_progress(on_progress, stage: str, current_sheet: str, findings, msg: str) -> None:
+    """Best-effort progress report. Never raises — pipeline must not break on a bad callback."""
+    if on_progress is None:
+        return
+    try:
+        sev = {"P0": 0, "P1": 0, "P2": 0}
+        for f in findings:
+            s = getattr(f, "severity", None) or "P2"
+            if s not in sev:
+                s = "P2"
+            sev[s] += 1
+        on_progress({
+            "stage": stage,
+            "current_sheet": current_sheet or "",
+            "llm_calls": {k: int(v.get("calls", 0)) for k, v in LLM_CALL_STATS.items()},
+            "findings_so_far": {
+                "P0": sev["P0"], "P1": sev["P1"], "P2": sev["P2"],
+                "total": len(findings),
+            },
+            "msg": msg,
+        })
+    except Exception:
+        pass
 
 
 def _parse_sheet_filter(raw: Optional[str]) -> Optional[List[str]]:
@@ -81,6 +106,7 @@ async def run_review(
     sheets: Optional[str] = None,
     llm,
     attachments_preview: Optional[Dict[str, object]] = None,
+    on_progress: Optional[Callable[[dict], None]] = None,
 ) -> Tuple[List[dict], dict]:
     """Run the full review pipeline. Returns (findings_dicts, stats)."""
     checkpoints = checkpoints or {}
@@ -143,11 +169,13 @@ async def run_review(
         "ocr": {"calls": 0, "success": 0, "errors": 0, "timeouts": 0},
         "details": [],
     }
+    _emit_progress(on_progress, "starting", "", findings, f"开始审阅，共 {len(target)} 个 sheet")
     for sheet in target:
         if sheet not in wb.sheetnames:
             _logger.info("  sheet=%r skipped (not in workbook)", sheet)
             continue
         ws = wb[sheet]
+        _emit_progress(on_progress, "checkpoints", sheet, findings, f"开始处理 {sheet}")
         _logger.info(
             "  sheet=%r cp=%r attachments=%r",
             sheet, bool(checkpoints.get(sheet)), bool(attachments),
@@ -186,6 +214,7 @@ async def run_review(
                 checkpoints=checkpoints[sheet],
                 attachments=attachments or None,
             )
+        _emit_progress(on_progress, "checkpoints", sheet, findings, f"完成 {sheet} checkpoint 评审")
         # 2) attachment-reference matching
         if attachments:
             findings += _check_attachment_references(sheet, ws, attachments)
@@ -195,6 +224,7 @@ async def run_review(
                 llm=llm, ws_title=sheet, ws=ws,
                 attachments=attachments,
             )
+        _emit_progress(on_progress, "evidence_steps", sheet, findings, f"完成 {sheet} 证据-步骤一致性检查")
         # 4) rule-based procedure-pair checks
         findings += _check_procedure_pairs(sheet, ws)
         # 5) sheet-scope checks
@@ -204,15 +234,18 @@ async def run_review(
             llm=llm, wb=wb, target_sheets=[sheet],
         )
         findings += ac_findings
+        _emit_progress(on_progress, "procedure_pairs", sheet, findings, f"完成 {sheet} 程序配对检查")
 
     findings_sorted = _sort_findings(findings)
 
     # LLM re-review of rule-based (non-LLM-tagged) findings
+    _emit_progress(on_progress, "findings_review", "", findings, "进入发现复核")
     review = await _llm_review_findings(wb, findings_sorted, llm)
 
     # Cross-validation + adversarial challenge for P0 / needs_review findings
     cross_issues: Dict[int, List[str]] = {}
     challenge: Dict[int, Optional[str]] = {}
+    _emit_progress(on_progress, "hallucination", "", findings_sorted, "进入交叉验证/对抗挑战")
     for idx, f in enumerate(findings_sorted, start=1):
         if f.severity == "P0" or f.needs_review:
             try:
@@ -235,6 +268,7 @@ async def run_review(
         d["challenge_verdict"] = challenge.get(idx)
         out.append(d)
 
+    _emit_progress(on_progress, "done", "", findings_sorted, "审阅完成")
     stats = {
         "total_findings": len(out),
         "by_severity": _counts_by(out, "severity"),

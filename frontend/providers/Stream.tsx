@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   FindingsPayload,
   ReviewArtifactPayload,
+  ReviewProgress,
   UnderstoodRequirement,
 } from "@/components/workbench/types";
 
@@ -37,6 +38,7 @@ type StreamContextType = {
   elapsedSeconds: number;
   reviewStatus: "idle" | "running" | "completed" | "error";
   reviewElapsedSeconds: number;
+  reviewProgress: ReviewProgress | null;
   findings: FindingsPayload | null;
   artifact: ReviewArtifactPayload | null;
   understoodRequirement: UnderstoodRequirement | null;
@@ -67,6 +69,7 @@ type ReviewPollOpts = {
   reviewId: string;
   signal: () => AbortSignal | undefined;
   onTick: (elapsedSeconds: number) => void;
+  onProgress?: (progress: ReviewProgress) => void;
   onCompleted: (payload: FindingsPayload) => void;
   onArtifact: (payload: ReviewArtifactPayload) => void;
   onError: (message: string) => void;
@@ -144,6 +147,13 @@ async function pollReviewStatus(opts: ReviewPollOpts): Promise<void> {
         opts.onError("审阅已取消");
         return;
       }
+      if (data.status === "running" && data.progress && opts.onProgress) {
+        try {
+          opts.onProgress(data.progress as ReviewProgress);
+        } catch {
+          // malformed progress payload — ignore, keep polling
+        }
+      }
       // status === "running" -> keep polling
     } catch (e) {
       if ((e as any)?.name === "AbortError") return;
@@ -186,6 +196,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
     "idle" | "running" | "completed" | "error"
   >("idle");
   const [reviewElapsedSeconds, setReviewElapsedSeconds] = useState(0);
+const [reviewProgress, setReviewProgress] = useState<ReviewProgress | null>(null);
   const [understoodRequirement, setUnderstoodRequirement] =
     useState<UnderstoodRequirement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -221,6 +232,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
     setArtifact(null);
     setReviewStatus("idle");
     setReviewElapsedSeconds(0);
+    setReviewProgress(null);
     setUnderstoodRequirement(null);
     reviewAbortRef.current?.abort();
     reviewAbortRef.current = null;
@@ -337,6 +349,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
             reviewId,
             signal: () => reviewAbort.signal,
             onTick: (secs) => setReviewElapsedSeconds(secs),
+            onProgress: setReviewProgress,
             onCompleted: (payload) => {
               setFindings(payload);
               setReviewStatus("completed");
@@ -394,6 +407,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
     elapsedSeconds,
     reviewStatus,
     reviewElapsedSeconds,
+    reviewProgress,
     findings,
     artifact,
     understoodRequirement,

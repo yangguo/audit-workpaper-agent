@@ -12,6 +12,7 @@ import type {
   AnalysisSection,
   EvidenceItem,
   ProgressStep,
+  ReviewProgress,
   SummaryMetric,
   ToolTrace,
   UnderstoodRequirement,
@@ -30,6 +31,7 @@ export function WorkbenchShell(props: {
   evidenceItems: EvidenceItem[];
   progressSteps: ProgressStep[];
   toolTraces: ToolTrace[];
+  liveProgress?: ReviewProgress | null;
   understoodRequirement?: UnderstoodRequirement | null;
   artifact?: ReviewArtifactPayload | null;
   isEmpty: boolean;
@@ -76,7 +78,7 @@ export function WorkbenchShell(props: {
         </main>
         <aside className="space-y-4">
           <ProgressStatusPanel steps={props.progressSteps} />
-          <ToolTracePanel traces={props.toolTraces} />
+          <ToolTracePanel traces={props.toolTraces} liveProgress={props.liveProgress} />
         </aside>
       </div>
     </div>

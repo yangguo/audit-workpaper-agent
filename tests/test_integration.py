@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 
 import openpyxl
 import pytest
@@ -156,4 +157,4 @@ async def test_review_workpaper_tool_accepts_attachment_directory(monkeypatch, t
 
     assert result["success"] is True
     assert result["review_id"] == "review-dir-1"
-    assert captured["attachments_dir"] == str(attachments_dir)
+    assert os.path.normpath(captured["attachments_dir"]) == os.path.normpath(str(attachments_dir))

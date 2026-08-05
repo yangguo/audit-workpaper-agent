@@ -559,3 +559,40 @@ def contextlib_suppress():
 @pytest.mark.asyncio
 async def test_get_status_unknown_returns_none():
     assert get_status("does-not-exist") is None
+
+
+@pytest.mark.asyncio
+async def test_progress_callback_updates_status():
+    _REGISTRY.clear()
+    review_id = "test-rid"
+    _REGISTRY[review_id] = {
+        "status": "running",
+        "started_at": runner._now(),
+        "source": "wp.xlsx",
+    }
+    # before any progress, status.progress is None
+    assert get_status(review_id)["progress"] is None
+
+    cb = runner._make_progress_cb(review_id)
+    cb({
+        "stage": "checkpoints",
+        "current_sheet": "SA-4c",
+        "llm_calls": {"checkpoints": 2},
+        "findings_so_far": {"P0": 0, "P1": 1, "P2": 0, "total": 1},
+        "msg": "完成 SA-4c checkpoint 评审",
+    })
+    st = get_status(review_id)
+    assert st["progress"]["stage"] == "checkpoints"
+    assert st["progress"]["current_sheet"] == "SA-4c"
+    assert st["progress"]["findings_so_far"]["total"] == 1
+    assert st["progress"]["recent_events"][-1]["msg"] == "完成 SA-4c checkpoint 评审"
+    assert len(st["progress"]["recent_events"]) == 1
+
+    # rolling window caps recent_events at 15
+    for i in range(20):
+        cb({
+            "stage": "checkpoints", "current_sheet": "", "llm_calls": {},
+            "findings_so_far": {"P0": 0, "P1": 0, "P2": 0, "total": 0},
+            "msg": f"evt {i}",
+        })
+    assert len(get_status(review_id)["progress"]["recent_events"]) == 15

@@ -4,6 +4,7 @@ import type {
   Finding,
   FindingsPayload,
   ProgressStep,
+  ReviewProgress,
   ToolTrace,
   UnderstoodRequirement,
   WorkbenchStatus,
@@ -34,6 +35,7 @@ type Input = {
   findings?: FindingsPayload | null;
   reviewStatus?: "idle" | "running" | "completed" | "error";
   reviewElapsedSeconds?: number;
+  reviewProgress?: ReviewProgress | null;
   understoodRequirement?: UnderstoodRequirement | null;
 };
 
@@ -115,13 +117,17 @@ function findingsToSections(findings: Finding[]): AnalysisSection[] {
 
 function findingsToEvidence(findings: Finding[]): EvidenceItem[] {
   const items: EvidenceItem[] = [];
+  const seen = new Map<string, number>();
   for (const f of findings) {
     for (const r of f.evidence_refs || []) {
       const name = r.attachment || r.cell_or_range || "";
       if (!name) continue;
+      const baseId = `f-${f.sheet || ""}-${name}`;
+      const count = seen.get(baseId) ?? 0;
+      seen.set(baseId, count + 1);
       const loc = f.sheet ? `${f.sheet}!${name}` : name;
       items.push({
-        id: `f-${f.sheet || ""}-${name}`,
+        id: count === 0 ? baseId : `${baseId}-${count}`,
         name: loc,
         source: "link",
         status: "ready",
@@ -133,6 +139,11 @@ function findingsToEvidence(findings: Finding[]): EvidenceItem[] {
 
 export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
   const uploaded = uploadedEvidence(input);
+  const totalElapsed = input.elapsedSeconds + (input.reviewElapsedSeconds ?? 0);
+  const liveProgress =
+    input.reviewStatus === "running" && input.reviewProgress
+      ? input.reviewProgress
+      : undefined;
   const latestAi = [...input.messages]
     .reverse()
     .find((message) => message.type === "ai" && message.content);
@@ -185,7 +196,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
       { label: "P1", value: String(bySev.P1 || 0) },
       { label: "P2", value: String(bySev.P2 || 0) },
       { label: "总计", value: String(input.findings.stats.total_findings) },
-      { label: "处理耗时", value: `${input.elapsedSeconds}s` },
+      { label: "处理耗时", value: `${totalElapsed}s` },
     ];
     const analysisSections = findingsToSections(input.findings.findings);
     const toolTraces: ToolTrace[] = Object.entries(
@@ -204,6 +215,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
       analysisSections,
       progressSteps,
       toolTraces,
+      liveProgress,
       understoodRequirement: input.understoodRequirement ?? null,
       lastUpdatedLabel,
       errorMessage,
@@ -229,7 +241,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
       value: latestAi?.content.includes("高风险") ? "高" : "中",
     },
     { label: "异常项", value: anomalyCount },
-    { label: "处理耗时", value: `${input.elapsedSeconds}s` },
+    { label: "处理耗时", value: `${totalElapsed}s` },
   ];
 
   return {
@@ -239,6 +251,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
     analysisSections,
     progressSteps,
     toolTraces,
+    liveProgress,
     understoodRequirement: input.understoodRequirement ?? null,
     lastUpdatedLabel,
     errorMessage,

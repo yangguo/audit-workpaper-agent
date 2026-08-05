@@ -30,6 +30,15 @@ export type ToolTrace = {
   argsSummary: string;
 };
 
+export type ReviewProgress = {
+  stage: string;
+  current_sheet: string;
+  llm_calls: Record<string, number>;
+  findings_so_far: { P0: number; P1: number; P2: number; total: number };
+  recent_events: { t: string; msg: string }[];
+  updated_at: string;
+};
+
 export type UnderstoodRequirement = {
   review_id?: string | null;
   status?: string | null;
@@ -49,6 +58,7 @@ export type WorkbenchViewModel = {
   analysisSections: AnalysisSection[];
   progressSteps: ProgressStep[];
   toolTraces: ToolTrace[];
+  liveProgress?: ReviewProgress | null;
   understoodRequirement?: UnderstoodRequirement | null;
   lastUpdatedLabel: string;
   errorMessage?: string;
