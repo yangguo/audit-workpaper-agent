@@ -71,6 +71,40 @@ def _now() -> str:
     return datetime.now().isoformat()
 
 
+def _now_time_only() -> str:
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def _make_progress_cb(review_id: str):
+    """Return an on_progress callback that updates the registry entry's progress.
+
+    Best-effort: swallows all exceptions so a callback bug can never break the review.
+    Maintains a rolling `recent_events` list (last 15).
+    """
+    def _cb(payload: dict) -> None:
+        try:
+            entry = _REGISTRY.get(review_id)
+            if entry is None:
+                return
+            prev = entry.get("progress") or {}
+            events = list(prev.get("recent_events") or [])
+            events.append({"t": _now_time_only(), "msg": str(payload.get("msg", ""))})
+            events = events[-15:]
+            entry["progress"] = {
+                "stage": payload.get("stage", ""),
+                "current_sheet": payload.get("current_sheet", ""),
+                "llm_calls": payload.get("llm_calls", {}) or {},
+                "findings_so_far": payload.get("findings_so_far") or {
+                    "P0": 0, "P1": 0, "P2": 0, "total": 0,
+                },
+                "recent_events": events,
+                "updated_at": _now(),
+            }
+        except Exception:
+            pass
+    return _cb
+
+
 def get_status(review_id: str) -> Optional[dict]:
     entry = _REGISTRY.get(review_id)
     if entry is None:
@@ -81,6 +115,7 @@ def get_status(review_id: str) -> Optional[dict]:
         "started_at": entry.get("started_at"),
         "source": entry.get("source"),
         "stats": entry.get("stats"),
+        "progress": entry.get("progress"),
         "error": entry.get("error"),
     }
     if "artifact_status" in entry:
@@ -207,6 +242,7 @@ async def _run_review(
             attachments_preview=attachments,
             sheets=sheets,
             llm=llm,
+            on_progress=_make_progress_cb(review_id),
         )
         save_findings(review_id, findings, stats, source=source)
         entry = _REGISTRY.get(review_id)
