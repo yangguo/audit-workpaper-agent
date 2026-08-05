@@ -333,3 +333,43 @@ async def test_run_review_partial_match_warns_but_does_not_fall_back(monkeypatch
     assert "全部 Sheet" not in warning, (
         f"should NOT fall back to all sheets: {warning!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_review_emits_progress_at_stages(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Empty"
+    llm = _FakeLLM('{"results": []}')
+    recorded: list[dict] = []
+    findings, stats = await run_review(
+        wb=wb, checkpoints={}, attachments_preview={}, sheets=None, llm=llm,
+        on_progress=lambda p: recorded.append(p),
+    )
+    stages = [p["stage"] for p in recorded]
+    assert "starting" in stages
+    assert "done" in stages
+    assert recorded[-1]["stage"] == "done"
+    assert recorded[-1]["findings_so_far"]["total"] == len(findings)
+    for p in recorded:
+        assert {"stage", "current_sheet", "llm_calls", "findings_so_far", "msg"} <= set(p.keys())
+        assert isinstance(p["llm_calls"], dict)
+        assert isinstance(p["findings_so_far"]["total"], int)
+
+
+@pytest.mark.asyncio
+async def test_run_review_ignores_on_progress_exceptions(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    wb.active.title = "Empty"
+    llm = _FakeLLM('{"results": []}')
+
+    def boom(p):
+        raise RuntimeError("progress callback broken")
+
+    findings, stats = await run_review(
+        wb=wb, checkpoints={}, attachments_preview={}, sheets=None, llm=llm,
+        on_progress=boom,
+    )
+    # review still completed despite the callback throwing
+    assert stats["total_findings"] == len(findings)
