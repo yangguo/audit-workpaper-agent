@@ -5,6 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from review.evidence_agent import (
+    _build_investigation_prompt,
     _item_summary,
     build_evidence_tools,
     investigate_sheet,
@@ -326,3 +327,38 @@ def test_item_summary_omits_source_for_real_attachments():
     s = _item_summary(item)
     assert "source_document" not in s
     assert "media_name" not in s
+
+
+def _fake_ws(title="PE-6"):
+    ws = type("WS", (), {"title": title, "iter_rows": lambda self, *a, **kw: iter([])})()
+    return ws
+
+
+def test_investigation_prompt_includes_embedded_media_examples():
+    # Build attachments with a couple of embedded media items
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/foo.docx::image1.png"},
+            {"rel_path": ".embedded_media/foo.docx::image2.png"},
+            {"rel_path": ".embedded_media/bar.docx::image1.png"},
+            {"rel_path": "审计证据/PE-6/foo.docx"},  # real, not embedded
+        ],
+        "status_counts": {"ok": 1, "binary": 3},
+    }
+    prompt = _build_investigation_prompt(_fake_ws(), attachments)
+    assert "embedded_media_examples" in prompt or "embedded_media_count" in prompt
+    assert "image1.png" in prompt or ".embedded_media/" in prompt
+
+
+def test_investigation_prompt_truncates_embedded_media_at_10():
+    attachments = {
+        "items": [
+            {"rel_path": f".embedded_media/x.docx::img{i}.png"} for i in range(15)
+        ],
+        "status_counts": {},
+    }
+    prompt = _build_investigation_prompt(_fake_ws(), attachments)
+    # Only first 10 should be embedded; total should be 15
+    assert "img0.png" in prompt
+    assert "img9.png" in prompt
+    # img10..14 should not appear in the examples list (or be truncated)

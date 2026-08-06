@@ -438,10 +438,30 @@ def _build_investigation_prompt(ws, attachments: Dict[str, object]) -> str:
             {"cell": coord, "text": _truncate(text, 500)}
             for coord, text in list(_extract_sheet_text_cells(ws))[:12]
         ]
+    # Build embedded media examples
+    embedded_examples = []
+    items = attachments.get("items", []) or []
+    for it in items:
+        rp = getattr(it, "rel_path", None) if not isinstance(it, dict) else it.get("rel_path")
+        if rp and rp.startswith(".embedded_media/") and "::" in rp:
+            after = rp[len(".embedded_media/"):]
+            source_doc, media_name = after.split("::", 1)
+            embedded_examples.append({"source_document": source_doc, "media_filename": media_name})
+        if len(embedded_examples) >= 10:
+            break
     payload = {
         "sheet": str(getattr(ws, "title", "") or ""),
         "cells": relevant_cells,
         "attachment_status_counts": attachments.get("status_counts", {}),
+        "embedded_media_count": sum(
+            1 for it in items
+            if (getattr(it, "rel_path", None) if not isinstance(it, dict) else it.get("rel_path", "")).startswith(".embedded_media/")
+        ),
+        "embedded_media_examples": embedded_examples,
+        "embedded_media_more": sum(
+            1 for it in items
+            if (getattr(it, "rel_path", None) if not isinstance(it, dict) else it.get("rel_path", "")).startswith(".embedded_media/")
+        ) > 10,
     }
     ocr_enabled = bool(attachments.get("ocr_enabled"))
     tools_text = "list_attachment_files、search_attachment_text、read_attachment"
@@ -605,6 +625,12 @@ async def investigate_sheet(
                 "你是受限的审计证据调查 Agent。你只能通过工具查看审阅快照中的附件索引和已提取文本。"
                 "你不可以执行命令、写文件、访问工具返回之外的路径或编造证据。"
                 + ("如果附件是图片或扫描件，可先使用 ocr_attachment 获取 OCR 原文；OCR 失败时必须保留 unresolved。" if ocr_client else "")
+                + "嵌入图指引：DOCX/PPTX/PDF 中提取出的嵌入图位于 .embedded_media/ 虚拟目录，"
+                + "路径形如 .embedded_media/<原文档名>::<图名>.<ext>。"
+                + "若需要核对该文档内的截图、流程图、扫描页证据，"
+                + "应直接对 .embedded_media/ 中的具体图调用 ocr_attachment，"
+                + "而非对整份 DOCX/PDF 调用（整份调用只会返回文字）。"
+                + "list_attachment_files 输出中可查看 source_document 字段定位图来源。"
                 + "你只负责定位候选证据，不负责给出审阅结论。最后必须返回约定 JSON。"
             ),
         )
