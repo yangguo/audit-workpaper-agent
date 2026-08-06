@@ -53,3 +53,28 @@ def test_extract_pptx_media_returns_each_image(tmp_path):
     items = extract_pptx_media(pptx)
     assert len(items) == 2
     assert sorted(i.media_filename for i in items) == ["slide1.png", "slide2.jpg"]
+
+
+def test_extract_pdf_media_returns_each_image(tmp_path, monkeypatch):
+    pdf = tmp_path / "doc.pdf"
+    from review import embedded_media
+
+    class _FakePage:
+        def __init__(self, images):
+            self.images = images
+
+    class _FakeReader:
+        def __init__(self, _path):
+            self.pages = [_FakePage([
+                (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, "png"),
+                (b"\xff\xd8\xff\xe0" + b"\x00" * 8, "jpeg"),
+            ])]
+
+    monkeypatch.setattr(embedded_media, "_PdfReader", _FakeReader, raising=False)
+    items = embedded_media.extract_pdf_media(pdf)
+    assert len(items) == 2
+    assert {i.file_type for i in items} == {"png", "jpeg"}
+    assert [i.media_index for i in items] == [1, 2]
+    assert [i.media_filename for i in items] == ["page1_img1.png", "page1_img2.jpeg"]
+    assert all(i.source_rel_path == "doc.pdf" for i in items)
+    assert all(i.bytes for i in items)
