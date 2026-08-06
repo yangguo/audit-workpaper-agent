@@ -139,6 +139,7 @@ function findingsToEvidence(findings: Finding[]): EvidenceItem[] {
 
 export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
   const uploaded = uploadedEvidence(input);
+  const reviewId = input.findings?.review_id;
   const totalElapsed = input.elapsedSeconds + (input.reviewElapsedSeconds ?? 0);
   const liveProgress =
     input.reviewStatus === "running" && input.reviewProgress
@@ -207,6 +208,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
       argsSummary: JSON.stringify(counts),
     }));
     return {
+      reviewId,
       status,
       evidenceItems: uploaded.concat(
         findingsToEvidence(input.findings.findings),
@@ -245,6 +247,7 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
   ];
 
   return {
+    reviewId,
     status,
     evidenceItems: uploaded,
     summaryMetrics,
