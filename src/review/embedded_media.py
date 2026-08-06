@@ -62,3 +62,31 @@ def extract_docx_media(docx_path: Path) -> List[ExtractedMedia]:
         _logger.warning("extract_docx_media failed for %s: %s", docx_path, exc)
         return []
     return out
+
+
+def extract_pptx_media(pptx_path: Path) -> List[ExtractedMedia]:
+    """Extract embedded images from a PPTX file. Returns [] on any error."""
+    out: List[ExtractedMedia] = []
+    try:
+        with zipfile.ZipFile(str(pptx_path)) as zf:
+            names = sorted(n for n in zf.namelist() if n.startswith("ppt/media/"))
+            for idx, name in enumerate(names, start=1):
+                media_filename = Path(name).name
+                ext = Path(media_filename).suffix.lower()
+                if ext not in _IMAGE_EXTS:
+                    continue
+                try:
+                    data = _safe_extract(zf, name)
+                except Exception:
+                    continue
+                out.append(ExtractedMedia(
+                    source_rel_path=pptx_path.name,
+                    media_filename=media_filename,
+                    media_index=idx,
+                    bytes=data,
+                    file_type=ext.lstrip("."),
+                ))
+    except (zipfile.BadZipFile, OSError, ValueError) as exc:
+        _logger.warning("extract_pptx_media failed for %s: %s", pptx_path, exc)
+        return []
+    return out

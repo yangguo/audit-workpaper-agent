@@ -1,7 +1,7 @@
 import io
 import zipfile
 
-from review.embedded_media import extract_docx_media
+from review.embedded_media import extract_docx_media, extract_pptx_media
 
 
 def _build_docx(media_files: dict[str, bytes]) -> bytes:
@@ -40,3 +40,16 @@ def test_extract_docx_media_skips_invalid_zip(tmp_path):
     bogus.write_bytes(b"not a zip")
     items = extract_docx_media(bogus)
     assert items == []
+
+
+def test_extract_pptx_media_returns_each_image(tmp_path):
+    pptx = tmp_path / "deck.pptx"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ppt/presentation.xml", b"<?xml version='1.0'?><p/>")
+        zf.writestr("ppt/media/slide1.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+        zf.writestr("ppt/media/slide2.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 8)
+    pptx.write_bytes(buf.getvalue())
+    items = extract_pptx_media(pptx)
+    assert len(items) == 2
+    assert sorted(i.media_filename for i in items) == ["slide1.png", "slide2.jpg"]
