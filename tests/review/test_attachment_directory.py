@@ -267,3 +267,23 @@ def test_check_attachment_references_does_not_flag_successful_ocr_as_unparsed():
 
 def test_build_attachment_index_rejects_missing_directory(tmp_path):
     assert build_attachment_index(str(tmp_path / "missing")) == {}
+
+
+def test_build_attachment_index_includes_docx_embedded_images(tmp_path):
+    from review.attachments import build_attachment_index
+    # Set up attachments dir with a docx containing an image
+    att_dir = tmp_path / "atts"
+    att_dir.mkdir()
+    docx = att_dir / "report.docx"
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", b"<?xml version='1.0'?><doc/>")
+        zf.writestr("word/media/picture.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)
+    docx.write_bytes(buf.getvalue())
+
+    idx = build_attachment_index(str(att_dir))
+    # Virtual attachment should be present
+    virtual = [it for it in idx["items"] if "embedded_media" in it.rel_path]
+    assert virtual, "expected virtual attachment from embedded image"
+    assert any(v.file_type == "png" for v in virtual)

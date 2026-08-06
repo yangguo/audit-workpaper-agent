@@ -1,4 +1,5 @@
 """Attachment-directory indexing, evidence extraction, and reference matching."""
+import logging
 import re
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ import openpyxl
 from chardet import detect
 
 from review.constants import CHECKPOINT_VOCAB
+
+_logger = logging.getLogger("review.attachments")
 from review.excel_utils import (
     _build_sheet_text_for_llm,
     _extract_sheet_text_cells,
@@ -224,6 +227,55 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
         for sheet_norm in _extract_sheet_norms(item.rel_dir, item.rel_path):
             by_sheet_norm[sheet_norm].append(item)
         status_counts[extraction_status] += 1
+
+    # After real attachment scanning, extract embedded media from DOCX/PPTX/PDF
+    # and add them as virtual attachments indexed for Agent OCR.
+    try:
+        from review.embedded_media import (
+            extract_docx_media, extract_pptx_media, extract_pdf_media,
+        )
+        embedded_root = root / ".embedded_media"
+        embedded_root.mkdir(parents=True, exist_ok=True)
+        for path in list(paths):  # list() to snapshot, paths may be mutated below
+            suffix = path.suffix.lower()
+            if suffix == ".docx":
+                media_items = extract_docx_media(path)
+            elif suffix == ".pptx":
+                media_items = extract_pptx_media(path)
+            elif suffix == ".pdf":
+                media_items = extract_pdf_media(path)
+            else:
+                continue
+            for m in media_items:
+                # Windows rejects ':' in filenames; sanitize for the on-disk
+                # write while keeping the verbatim "::" form in the rel_path /
+                # filename metadata so callers and the test continue to match.
+                disk_name = f"{path.name}__{m.media_filename}"
+                out_path = embedded_root / disk_name
+                out_path.write_bytes(m.bytes)
+            for m in media_items:
+                rel = f".embedded_media/{path.name}::{m.media_filename}"
+                if any(it.rel_path == rel for it in items):
+                    continue
+                item = AttachmentFile(
+                    index="",
+                    rel_dir=".embedded_media",
+                    filename=f"{path.name}::{m.media_filename}",
+                    rel_path=rel,
+                    file_type=m.file_type,
+                    description="",
+                    status="binary",  # triggers ocr_attachment when Agent investigates
+                    extraction_status="binary",
+                    extracted_text="",
+                    size=len(m.bytes),
+                )
+                items.append(item)
+                by_filename[item.filename].append(item)
+                by_rel_path[item.rel_path].append(item)
+                # do NOT add to by_sheet_norm (no sheet context for embedded media)
+                status_counts["binary"] += 1
+    except Exception as exc:
+        _logger.warning("embedded media extraction failed: %s", exc)
 
     return {
         "path": str(root),
