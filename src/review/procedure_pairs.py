@@ -39,6 +39,135 @@ def _requires_evidence_by_standard(standard_text: str) -> Sequence[str]:
     return required
 
 
+def _looks_no_occurrence_exec(execution_text: str) -> bool:
+    t = (execution_text or "").replace(" ", "").replace("\n", "").replace("\r", "")
+    if not t:
+        return False
+    time_markers = ("审计期间", "本期", "期间内", "测试期间", "本年度", "年度内")
+    if not any(x in t for x in time_markers):
+        return False
+    if "未对此控制点进行测试" in t or "故未对" in t or "不适用" in t or t.lower().find("n/a") >= 0:
+        return True
+    action_markers = ("迁移", "开发", "重开发", "上线", "项目", "变更", "发布", "投产", "升级", "实施", "切换", "改造", "功能重开发")
+    return re.search(r"(未|无)(发生|进行|开展|实施|发生过)?(.{0,18})(" + "|".join(action_markers) + ")", t) is not None
+
+
+def _standard_looks_conditional(standard_text: str) -> bool:
+    t = (standard_text or "").replace(" ", "").replace("\n", "").replace("\r", "")
+    if not t:
+        return False
+    markers = ("抽取", "样本", "期间", "迁移", "上线", "开发", "项目", "变更", "发布", "投产", "升级", "实施", "切换", "改造")
+    return any(m in t for m in markers)
+
+
+def _classify_mismatch(standard_text: str, execution_text: str, reason: str):
+    """Classify an A-C mismatch into a specific issue_type / severity / suggestion.
+
+    The goal is to avoid emitting many findings that all share the generic
+    "执行程序不符合标准审计程序" label, which makes distinct issues look like
+    duplicates in the UI.
+    """
+    r = (reason or "").strip()
+    r2 = r.replace(" ", "")
+    if _looks_no_occurrence_exec(execution_text) and _standard_looks_conditional(standard_text):
+        has_basis_evidence = any(k in (execution_text or "") for k in EVIDENCE_KEYWORDS) or any(
+            k in (execution_text or "") for k in ("清单", "导出", "台账", "日志", "工单", "记录", "报告")
+        )
+        sev = "低" if has_basis_evidence else "中"
+        return (
+            "LLM判定：期间内无发生/不适用（不应按未执行判缺陷）",
+            sev,
+            "将该控制点按“不适用/总体为0”处理：在底稿中明确审计期间总体=0，并补充无发生依据（项目清单/变更台账/发布记录/工单/日志导出等）；如仅访谈说明，需补充可复核的清单或系统导出佐证。",
+        )
+
+    # Specific mismatch categories (most specific first) so distinct issues
+    # don't all collapse into the generic "执行程序不符合标准审计程序" bucket.
+    if any(k in r2 for k in ("人员清单", "复核人员", "复核权限", "具有复核权限", "复核人", "权限范围", "权限清单", "管理员账号", "特权用户")):
+        return (
+            "LLM判定：执行程序未覆盖复核人员/权限范围",
+            "高",
+            "补充/修改执行程序以明确复核人员清单、复核权限范围及职责匹配性，并在底稿中保留可复核来源（权限清单/岗位说明/组织架构图/审批记录等）。",
+        )
+    if any(k in r2 for k in ("日志范围", "操作系统", "数据库", "堡垒机", "应用层", "日志覆盖", "覆盖范围")) and any(
+        k in r2 for k in ("未覆盖", "缺少", "不足", "不完整", "未涉及")
+    ):
+        return (
+            "LLM判定：执行程序未覆盖日志/系统范围",
+            "高",
+            "补充/修改执行程序以覆盖应用程序、操作系统、数据库/堡垒机等全范围日志复核，并在底稿中保留可复核来源（导出清单/日志文件/系统截图等）。",
+        )
+    if any(k in r2 for k in ("精确性", "适当性", "异常", "跟进", "解决", "追查")):
+        return (
+            "LLM判定：执行程序未充分评估复核精确性与异常跟进",
+            "高",
+            "补充/修改执行程序以评估复核工作的精确性、适当性，以及异常操作的发现与跟进/解决情况，并在底稿中保留复核记录与异常处理痕迹。",
+        )
+    if any(k in r2 for k in ("截图", "参数", "配置", "界面", "系统配置")):
+        return (
+            "LLM判定：执行程序缺少系统配置/截图证据",
+            "中",
+            "补充系统配置界面截图、参数设置记录等实质性证据，并在底稿中说明配置项与控制要求的对应关系。",
+        )
+    if any(k in r2 for k in ("控制设计", "设计有效性", "证实控制设计")) and any(
+        k in r2 for k in ("访谈", "询问", "未描述", "未检查", "缺少", "不足", "未提供", "未涉及")
+    ):
+        return (
+            "LLM判定：设计有效性结论缺乏证据支持",
+            "高",
+            "补充对控制设计有效性的证据检查（如制度文件、系统配置、日志留存策略等），避免仅基于访谈得出设计有效结论。",
+        )
+    if any(k in r2 for k in ("导出", "清单", "台账", "用户清单", "权限清单")) and any(
+        k in r2 for k in ("未获取", "未提供", "缺少", "缺失", "不足")
+    ):
+        return (
+            "LLM判定：执行程序缺少导出清单/台账证据",
+            "中",
+            "补充获取相关导出清单/台账（如用户清单、权限清单、日志清单等），并在底稿中说明抽样范围与核查结论。",
+        )
+    if any(k in r2 for k in ("管理层询问", "管理层访谈")) and any(
+        k in r2 for k in ("未进行", "未执行", "缺少", "缺失", "不足", "未涉及")
+    ):
+        return (
+            "LLM判定：执行程序缺少管理层询问/访谈证据",
+            "中",
+            "补充对管理层/关键岗位的询问或访谈记录，并在底稿中记录访谈对象、职责、内容及结论依据。",
+        )
+    if any(k in r2 for k in ("制度", "规程", "政策", "流程", "规定", "办法", "指引")) and any(
+        k in r2 for k in ("缺失", "未制定", "待完善", "未明确", "缺少")
+    ):
+        return (
+            "LLM判定：执行程序缺少制度/流程文件证据",
+            "中",
+            "补充获取相关制度/规程/流程文件，或在底稿中说明文件缺失的影响及替代性证据。",
+        )
+
+    if any(k in r2 for k in ("访谈对象", "访谈人", "受访", "访谈人员")) and any(k in r2 for k in ("不一致", "不同", "不匹配")):
+        return (
+            "LLM判定：访谈对象/角色表述差异（可能等效）",
+            "低",
+            "在底稿中补充访谈对象岗位/职责与标准角色的对应关系（同部门/同职能可视为等效），并说明选择该人员的原因；如涉及关键岗位职责差异，补充关键角色访谈或邮件确认。",
+        )
+    if any(k in r2 for k in ("检查对象", "制度", "规范", "办法", "要求", "流程", "文件")) and any(k in r2 for k in ("不一致", "不同", "不匹配")):
+        return (
+            "LLM判定：制度/文件名称差异（需确认覆盖范围）",
+            "低",
+            "在底稿中说明所检查文件与标准要求的主题一致性（范围/适用系统/章节映射），必要时补充目录截图或关键条款摘录，证明已覆盖标准控制要点。",
+        )
+    if any(k in r2 for k in ("未满足", "未明确", "未确认", "未覆盖", "未涉及", "缺少", "不足", "没有", "缺失")) and any(
+        k in r2 for k in ("条件", "完善", "方案", "计划", "所有", "全部", "必须", "范围", "方式", "保存")
+    ):
+        return (
+            "LLM判定：执行结论未覆盖标准关键条件",
+            "中",
+            "补充对标准关键条件的逐条确认记录（例如：抽取若干项目方案/计划验证、引用制度条款、说明样本范围/期间），并在结论中明确对应条件是否满足。",
+        )
+    return (
+        "LLM判定：执行程序不符合标准审计程序",
+        "高",
+        "补充/修改执行程序以覆盖标准要求的审计动作、对象、条件与证据类型，并在底稿中保留可复核来源（截图/导出清单/日志台账/审批或协议等）。",
+    )
+
+
 def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
     findings: List[Finding] = []
     header_row, standard_col, execution_cols = _detect_layout(ws)
@@ -475,64 +604,6 @@ async def _llm_check_procedure_pairs(
     def _has_policy_evidence(text):
         t = text or ""
         return any(k in t for k in ("制度", "规程", "政策", "流程", "规定", "办法", "指引", "《", "<"))
-
-    def _looks_no_occurrence_exec(execution_text):
-        t = (execution_text or "").replace(" ", "").replace("\n", "").replace("\r", "")
-        if not t:
-            return False
-        time_markers = ("审计期间", "本期", "期间内", "测试期间", "本年度", "年度内")
-        if not any(x in t for x in time_markers):
-            return False
-        if "未对此控制点进行测试" in t or "故未对" in t or "不适用" in t or t.lower().find("n/a") >= 0:
-            return True
-        action_markers = ("迁移", "开发", "重开发", "上线", "项目", "变更", "发布", "投产", "升级", "实施", "切换", "改造", "功能重开发")
-        return re.search(r"(未|无)(发生|进行|开展|实施|发生过)?(.{0,18})(" + "|".join(action_markers) + ")", t) is not None
-
-    def _standard_looks_conditional(standard_text):
-        t = (standard_text or "").replace(" ", "").replace("\n", "").replace("\r", "")
-        if not t:
-            return False
-        markers = ("抽取", "样本", "期间", "迁移", "上线", "开发", "项目", "变更", "发布", "投产", "升级", "实施", "切换", "改造")
-        return any(m in t for m in markers)
-
-    def _classify_mismatch(standard_text, execution_text, reason):
-        r = (reason or "").strip()
-        r2 = r.replace(" ", "")
-        if _looks_no_occurrence_exec(execution_text) and _standard_looks_conditional(standard_text):
-            has_basis_evidence = any(k in (execution_text or "") for k in EVIDENCE_KEYWORDS) or any(
-                k in (execution_text or "") for k in ("清单", "导出", "台账", "日志", "工单", "记录", "报告")
-            )
-            sev = "低" if has_basis_evidence else "中"
-            return (
-                "LLM判定：期间内无发生/不适用（不应按未执行判缺陷）",
-                sev,
-                "将该控制点按“不适用/总体为0”处理：在底稿中明确审计期间总体=0，并补充无发生依据（项目清单/变更台账/发布记录/工单/日志导出等）；如仅访谈说明，需补充可复核的清单或系统导出佐证。",
-            )
-        if any(k in r2 for k in ("访谈对象", "访谈人", "受访", "访谈人员")) and any(k in r2 for k in ("不一致", "不同", "不匹配")):
-            return (
-                "LLM判定：访谈对象/角色表述差异（可能等效）",
-                "低",
-                "在底稿中补充访谈对象岗位/职责与标准角色的对应关系（同部门/同职能可视为等效），并说明选择该人员的原因；如涉及关键岗位职责差异，补充关键角色访谈或邮件确认。",
-            )
-        if any(k in r2 for k in ("检查对象", "制度", "规范", "办法", "要求", "流程", "文件")) and any(k in r2 for k in ("不一致", "不同", "不匹配")):
-            return (
-                "LLM判定：制度/文件名称差异（需确认覆盖范围）",
-                "低",
-                "在底稿中说明所检查文件与标准要求的主题一致性（范围/适用系统/章节映射），必要时补充目录截图或关键条款摘录，证明已覆盖标准控制要点。",
-            )
-        if any(k in r2 for k in ("未满足", "未明确", "未确认", "未覆盖", "缺少", "不足", "没有")) and any(
-            k in r2 for k in ("条件", "完善", "方案", "计划", "所有", "全部", "必须")
-        ):
-            return (
-                "LLM判定：执行结论未覆盖标准关键条件",
-                "中",
-                "补充对标准关键条件的逐条确认记录（例如：抽取若干项目方案/计划验证、引用制度条款、说明样本范围/期间），并在结论中明确对应条件是否满足。",
-            )
-        return (
-            "LLM判定：执行程序不符合标准审计程序",
-            "高",
-            "补充/修改执行程序以覆盖标准要求的审计动作、对象、条件与证据类型，并在底稿中保留可复核来源（截图/导出清单/日志台账/审批或协议等）。",
-        )
 
     for sheet in target_sheets:
         if sheet not in wb.sheetnames:

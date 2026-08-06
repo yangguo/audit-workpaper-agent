@@ -88,7 +88,10 @@ async def test_llm_check_evidence_vs_steps_returns_findings(monkeypatch):
         attachments_preview=_preview_with_item(), batch_size=6, sleep_seconds=0,
     )
 
-    assert any(f.issue_type.startswith("LLM判定：证据-步骤一致性-") and f.status == "fail" for f in findings)
+    assert any(
+        f.issue_type == "LLM判定：证据-步骤一致性-证据与审计步骤不匹配（证据不足）"
+        and f.status == "fail" for f in findings
+    )
 
 
 @pytest.mark.asyncio

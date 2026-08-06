@@ -105,7 +105,7 @@ async def test_llm_check_sheet_by_checkpoints_returns_findings(monkeypatch):
     )
 
     assert len(findings) == 1
-    assert findings[0].issue_type.startswith("LLM判定：")
+    assert findings[0].issue_type == "LLM判定：检查要点存在问题（证据不足）"
     assert findings[0].status == "fail"
     assert findings[0].severity == "P1"
 

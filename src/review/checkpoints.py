@@ -212,15 +212,15 @@ async def _llm_check_sheet_by_checkpoints(
                 severity = _SEVERITY_FROM_CHINESE.get(raw_sev, raw_sev)
                 if severity not in ("P0", "P1", "P2"):
                     severity = "P1" if status != "unknown" else "P2"
-                issue_type = str(obj.get("issue_type", "")).strip() or (
-                    "检查要点存在问题" if status == "fail" else "检查要点信息不足/不确定"
-                )
+                risk_type = str(obj.get("risk_type", "")).strip()
+                base_issue = "检查要点存在问题" if status == "fail" else "检查要点信息不足/不确定"
+                provided_issue = str(obj.get("issue_type", "")).strip()
+                issue_type = provided_issue or (f"{base_issue}（{risk_type}）" if risk_type else base_issue)
                 basis = str(obj.get("basis", "")).strip()
                 suggestion = str(obj.get("suggestion", "")).strip()
                 conclusion = str(obj.get("conclusion", "")).strip()
                 reasons_raw = obj.get("reasons", [])
                 reasons_list = [str(r).strip() for r in reasons_raw if r] if isinstance(reasons_raw, list) else []
-                risk_type = str(obj.get("risk_type", "")).strip()
                 unknown_reason = str(obj.get("unknown_reason", "")).strip()
                 fix_suggestion_obj = obj.get("fix_suggestion") or {}
                 if not isinstance(fix_suggestion_obj, dict):

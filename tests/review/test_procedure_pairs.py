@@ -9,6 +9,7 @@ from review.procedure_pairs import (
     _check_sheet_scope,
     _llm_judge_procedure_pair,
     _llm_check_procedure_pairs,
+    _classify_mismatch,
 )
 
 
@@ -131,3 +132,40 @@ async def test_llm_check_procedure_pairs_flags_mismatch(monkeypatch):
     )
     assert report["total"] >= 1
     assert any(f.issue_type.startswith("LLM判定：") for f in findings)
+
+
+def test_classify_mismatch_distinguishes_sa12_reasons():
+    """Regression guard: SA-12 produced 5 P0 findings that all looked identical
+    because they shared the generic '执行程序不符合标准审计程序' label.
+    The classifier should now map them to distinct issue_type buckets.
+    """
+    cases = [
+        # C15 - missing personnel list
+        ("获取准确及完整的执行特权级别用户日志复核的人员清单",
+         "实际执行中获取并查看的是审阅记录，未明确提及获取复核人员清单，未覆盖标准要求的关键审计动作和证据类型。",
+         "LLM判定：执行程序未覆盖复核人员/权限范围"),
+        # C18 - missing log/system scope
+        ("获取准确及完整的信息系统特权级别用户日志复核清单（检查范围包括应用程序、操作系统及数据库/堡垒机等日志）",
+         "实际执行仅确认对应用层管理员操作日志进行了全量复核，未覆盖操作系统、数据库/堡垒机等日志范围，未满足标准的关键检查范围要求。",
+         "LLM判定：执行程序未覆盖日志/系统范围"),
+        # C19 - review precision / exception follow-up
+        ("确认日志复核工作是否足够精确、复核内容是否适当，以保证相关异常操作能够被发现并追查原因",
+         "实际执行仅说明查看了日志复核审阅记录并确认未见明显异常，但未提供足够证据证明复核工作足够精确、复核内容适当。",
+         "LLM判定：执行程序未充分评估复核精确性与异常跟进"),
+        # C5 - design effectiveness conclusion lacks evidence
+        ("询问IT管理层并了解日志管理制度、记录方式、级别、范围；检查证据以证实控制设计。",
+         "标准要求检查证据以证实控制设计，而实际执行未描述对证据的检查，仅基于访谈得出结论，证据不足。",
+         "LLM判定：设计有效性结论缺乏证据支持"),
+    ]
+    for standard, reason, expected_issue in cases:
+        issue_type, sev, _ = _classify_mismatch(standard, "", reason)
+        assert issue_type == expected_issue, (
+            f"expected {expected_issue!r}, got {issue_type!r} for reason: {reason[:80]}"
+        )
+        assert sev == "高"
+
+
+def test_classify_mismatch_falls_back_to_generic():
+    issue_type, sev, _ = _classify_mismatch("标准程序", "执行程序", "不符合要求")
+    assert issue_type == "LLM判定：执行程序不符合标准审计程序"
+    assert sev == "高"

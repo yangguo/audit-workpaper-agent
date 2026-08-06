@@ -335,6 +335,7 @@ const [reviewProgress, setReviewProgress] = useState<ReviewProgress | null>(null
       }
 
       if (aiText.trim()) {
+        setIsLoading(false);
         setTaskStatus("completed");
         setMessages((prev) =>
           prev.map((m) => (m.id === aiId ? { ...m, content: aiText } : m)),
