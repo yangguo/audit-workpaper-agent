@@ -1,7 +1,16 @@
 import io
+import json
 import pytest
 import openpyxl
+from fastapi.testclient import TestClient
+
+from main import app
 from review.export import generate_findings_xlsx
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
 
 
 def test_generate_findings_xlsx_includes_all_columns():
@@ -31,3 +40,36 @@ def test_generate_findings_xlsx_includes_all_columns():
     assert headers[3] == "问题类型"
     assert ws.cell(row=2, column=4).value == "问题A"
     assert ws.cell(row=2, column=5).value == "P0 / 高"
+
+
+def test_export_findings_returns_xlsx(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    results_dir = tmp_path / "assets" / "results"
+    results_dir.mkdir(parents=True)
+    payload = {
+        "review_id": "r123",
+        "created_at": "2026-08-06T00:00:00",
+        "source": "test.xlsx",
+        "stats": {"total_findings": 1, "by_severity": {"P0": 1}},
+        "findings": [{
+            "issue_type": "问题A", "severity": "P0", "severity_display": "高",
+            "sheet": "SA-1", "cell": "C5", "risk_type": "一致性", "status": "fail",
+            "conclusion": "结论", "basis": "依据", "suggestion": "建议",
+            "evidence_refs": [], "cross_validate_issues": [],
+        }],
+    }
+    (results_dir / "r123_findings.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    res = client.get("/findings/r123/export?format=xlsx")
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "findings_r123.xlsx" in res.headers["content-disposition"]
+    # Should be a valid xlsx
+    wb = openpyxl.load_workbook(io.BytesIO(res.content))
+    assert wb.active.title == "审阅发现汇总"
+
+
+def test_export_findings_missing_returns_404(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    res = client.get("/findings/notexist/export?format=xlsx")
+    assert res.status_code == 404
