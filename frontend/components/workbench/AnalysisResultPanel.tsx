@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Download } from "lucide-react";
+import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -413,19 +414,33 @@ export function AnalysisResultPanel({
 }) {
   const [exporting, setExporting] = useState(false);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!reviewId) return;
+    const backendUrl =
+      process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+    const url = `${backendUrl}/findings/${reviewId}/export?format=xlsx`;
+    const filename = `findings_${reviewId}.xlsx`;
     setExporting(true);
     try {
-      const backendUrl =
-        process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
-      const url = `${backendUrl}/findings/${reviewId}/export?format=xlsx`;
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `findings_${reviewId}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const response = await fetch(url);
+      if (!response.ok) {
+        toast.error("导出失败，请稍后重试。");
+        return;
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch {
+      toast.error("导出失败，请检查网络后重试。");
     } finally {
       setExporting(false);
     }
