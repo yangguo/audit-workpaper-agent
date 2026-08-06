@@ -25,6 +25,11 @@ def _get_cell_value(ws, cell_ref: str) -> Optional[str]:
         cell = ws[cell_ref]
     except (KeyError, ValueError):
         return None
+    # openpyxl returns a tuple of cells for range/column/row access (e.g.
+    # ws["A1:B2"] or ws["A"]). Treat those as malformed references rather
+    # than crashing on cell.value.
+    if isinstance(cell, tuple):
+        return None
     value = cell.value
     if value is None and ws.merged_cells.ranges:
         for merged_range in ws.merged_cells.ranges:

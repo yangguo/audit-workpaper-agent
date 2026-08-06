@@ -254,6 +254,7 @@ export function Thread() {
         isEmpty={isEmpty}
         errorMessage={model.errorMessage}
         runningMessage={model.runningMessage}
+        reviewId={model.reviewId}
         intake={
           <ReviewIntakePanel
             archiveUrl={archiveUrl}

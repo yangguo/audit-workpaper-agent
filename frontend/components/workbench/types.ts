@@ -52,6 +52,7 @@ export type UnderstoodRequirement = {
 };
 
 export type WorkbenchViewModel = {
+  reviewId?: string;
   status: WorkbenchStatus;
   evidenceItems: EvidenceItem[];
   summaryMetrics: SummaryMetric[];

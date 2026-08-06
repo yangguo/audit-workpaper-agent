@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { buildWorkbenchViewModel } from "../view-model";
 
+const buildInput = (overrides: Parameters<typeof buildWorkbenchViewModel>[0]) => ({
+  status: "completed" as const,
+  archiveUrl: "",
+  contentBlocks: [],
+  messages: [],
+  isLoading: false,
+  elapsedSeconds: 0,
+  error: null,
+  ...overrides,
+});
+
 describe("buildWorkbenchViewModel", () => {
   it("derives evidence, summary metrics, result sections, and progress state", () => {
     const model = buildWorkbenchViewModel({
@@ -66,6 +77,38 @@ describe("buildWorkbenchViewModel", () => {
       true,
     );
     expect(failed.errorMessage).toBe("分析失败，请检查输入材料后重试。");
+  });
+
+  it("exposes reviewId from findings payload", () => {
+    const input = buildInput({
+      findings: {
+        review_id: "r123",
+        created_at: "",
+        source: "test.xlsx",
+        stats: {
+          total_findings: 1,
+          by_severity: { P0: 1, P1: 0, P2: 0 },
+          by_status: {},
+          by_risk_type: {},
+          llm_call_stats: {},
+        },
+        findings: [
+          {
+            issue_type: "问题",
+            severity: "P0",
+            sheet: "SA-1",
+            cell: "C5",
+            snippet: "",
+            basis: "",
+            suggestion: "",
+            status: "fail",
+            risk_type: "一致性",
+          },
+        ],
+      },
+    });
+    const model = buildWorkbenchViewModel(input);
+    expect(model.reviewId).toBe("r123");
   });
 
   it("builds metrics and sections from structured findings when provided", () => {

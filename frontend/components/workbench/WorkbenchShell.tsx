@@ -38,6 +38,7 @@ export function WorkbenchShell(props: {
   errorMessage?: string;
   runningMessage?: string;
   intake?: ReactNode;
+  reviewId?: string;
 }) {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
@@ -73,6 +74,7 @@ export function WorkbenchShell(props: {
               sections={props.analysisSections}
               runningMessage={props.runningMessage}
               errorMessage={props.errorMessage}
+              reviewId={props.reviewId}
             />
           )}
         </main>

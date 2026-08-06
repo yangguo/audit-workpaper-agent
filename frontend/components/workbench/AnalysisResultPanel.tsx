@@ -1,9 +1,13 @@
+import { useState } from "react";
+import { Download } from "lucide-react";
+import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 
+import { Button } from "@/components/ui/button";
 import type { AnalysisSection, EvidenceRef, Finding } from "./types";
 
 const markdownComponents: any = {
@@ -401,14 +405,63 @@ export function AnalysisResultPanel({
   sections,
   runningMessage,
   errorMessage,
+  reviewId,
 }: {
   sections: AnalysisSection[];
   runningMessage?: string;
   errorMessage?: string;
+  reviewId?: string;
 }) {
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    if (!reviewId) return;
+    const backendUrl =
+      process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+    const url = `${backendUrl}/findings/${reviewId}/export?format=xlsx`;
+    const filename = `findings_${reviewId}.xlsx`;
+    setExporting(true);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        toast.error("导出失败，请稍后重试。");
+        return;
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch {
+      toast.error("导出失败，请检查网络后重试。");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <section className="rounded-2xl border bg-white p-5">
-      <h2 className="text-base font-semibold">分析结果</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-semibold">分析结果</h2>
+        {reviewId ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExport}
+            disabled={exporting}
+          >
+            <Download className="mr-1 size-4" />
+            导出 Excel 报告
+          </Button>
+        ) : null}
+      </div>
       {errorMessage ? (
         <div className="border-destructive/30 bg-destructive/5 text-destructive mt-4 rounded-xl border p-4 text-sm">
           {errorMessage}

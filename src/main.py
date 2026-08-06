@@ -6,6 +6,7 @@ except ImportError:
 
 import argparse
 import asyncio
+import io
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ import uuid
 from typing import Any, Dict, Optional, AsyncGenerator
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from api.upload import router as upload_router
@@ -22,6 +23,7 @@ from langchain_core.runnables import RunnableConfig
 
 from review.runner import get_status as get_review_status
 from review.artifact_view import build_artifact_view
+from review.export import generate_findings_xlsx
 from storage.findings_store import load_findings
 from storage.review_artifact_store import ReviewArtifactStore
 from utils.context import Context, request_context, new_context
@@ -437,6 +439,24 @@ async def get_findings(review_id: str):
     if payload is None:
         raise HTTPException(status_code=404, detail="findings not found")
     return payload
+
+
+@app.get("/findings/{review_id}/export")
+async def export_findings(review_id: str, format: str = Query("xlsx")):
+    """Export review findings as an Excel report."""
+    payload = load_findings(review_id)
+    if not payload or not payload.get("findings"):
+        raise HTTPException(status_code=404, detail="findings not found or empty")
+    if format != "xlsx":
+        raise HTTPException(status_code=400, detail="unsupported format")
+
+    xlsx_bytes = generate_findings_xlsx(payload["findings"])
+    filename = f"findings_{review_id}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.get("/review/{review_id}/status")

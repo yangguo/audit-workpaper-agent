@@ -1,8 +1,35 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkbenchShell } from "../WorkbenchShell";
 import { ReviewIntakePanel } from "../ReviewIntakePanel";
+
+// Mock sonner's toast so tests can assert that error notifications are
+// dispatched on export failures without rendering the real Toaster.
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
+}));
+
+import { toast } from "sonner";
+
+const baseWorkbenchProps = {
+  header: {
+    title: "审计底稿审阅",
+    subtitle: "会话 A",
+    statusLabel: "已完成",
+  },
+  summaryMetrics: [],
+  analysisSections: [],
+  evidenceItems: [],
+  progressSteps: [],
+  toolTraces: [],
+  isEmpty: false,
+};
 
 describe("WorkbenchShell", () => {
   it("renders the audit workbench regions", () => {
@@ -296,6 +323,126 @@ describe("WorkbenchShell", () => {
     expect(screen.getByText("“权限清单原文”")).toBeInTheDocument();
     expect(screen.getAllByText("证据 1")).toHaveLength(2);
     expect(screen.getByText("“执行描述原文”")).toBeInTheDocument();
+  });
+
+  it("renders export button when reviewId is provided", () => {
+    render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+    expect(screen.getByText("导出 Excel 报告")).toBeInTheDocument();
+  });
+
+  it("hides export button when reviewId is absent", () => {
+    render(<WorkbenchShell {...baseWorkbenchProps} />);
+    expect(screen.queryByText("导出 Excel 报告")).not.toBeInTheDocument();
+  });
+
+  describe("export click behaviour", () => {
+    let fetchMock: ReturnType<typeof vi.fn>;
+    let createObjectURLMock: ReturnType<typeof vi.fn>;
+    let revokeObjectURLMock: ReturnType<typeof vi.fn>;
+    let originalFetch: typeof fetch | undefined;
+    let originalCreate: typeof URL.createObjectURL | undefined;
+    let originalRevoke: typeof URL.revokeObjectURL | undefined;
+
+    beforeEach(() => {
+      vi.mocked(toast.error).mockClear();
+      originalFetch = globalThis.fetch;
+      originalCreate = URL.createObjectURL;
+      originalRevoke = URL.revokeObjectURL;
+      fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      createObjectURLMock = vi.fn(() => "blob:mock-url");
+      revokeObjectURLMock = vi.fn();
+      URL.createObjectURL = createObjectURLMock as unknown as typeof URL.createObjectURL;
+      URL.revokeObjectURL = revokeObjectURLMock as unknown as typeof URL.revokeObjectURL;
+    });
+
+    afterEach(() => {
+      if (originalFetch) globalThis.fetch = originalFetch;
+      else delete (globalThis as { fetch?: typeof fetch }).fetch;
+      if (originalCreate) URL.createObjectURL = originalCreate;
+      if (originalRevoke) URL.revokeObjectURL = originalRevoke;
+    });
+
+    it("fetches the export URL and triggers a blob download on success", async () => {
+      const user = userEvent.setup();
+      fetchMock.mockResolvedValue({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(["xlsx-bytes"])),
+      });
+
+      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+
+      const button = screen.getByRole("button", { name: "导出 Excel 报告" });
+      expect(button).not.toBeDisabled();
+      await user.click(button);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const calledUrl = fetchMock.mock.calls[0][0];
+      expect(String(calledUrl)).toContain("/findings/r123/export?format=xlsx");
+
+      // Allow microtask queue to flush (response.blob() is async).
+      await vi.waitFor(() => {
+        expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+      });
+      expect(revokeObjectURLMock).toHaveBeenCalledTimes(1);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("disables the button while the export fetch is in flight", async () => {
+      const user = userEvent.setup();
+      let resolveResponse: (value: unknown) => void = () => {};
+      fetchMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveResponse = resolve;
+          }),
+      );
+
+      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+
+      const button = screen.getByRole("button", { name: "导出 Excel 报告" });
+      await user.click(button);
+
+      // While the promise is pending the button must reflect the loading state.
+      expect(button).toBeDisabled();
+
+      resolveResponse({
+        ok: true,
+        blob: () => Promise.resolve(new Blob(["xlsx"])),
+      });
+
+      await vi.waitFor(() => {
+        expect(button).not.toBeDisabled();
+      });
+    });
+
+    it("shows a toast when the server responds with a non-OK status", async () => {
+      const user = userEvent.setup();
+      fetchMock.mockResolvedValue({
+        ok: false,
+        blob: () => Promise.resolve(new Blob()),
+      });
+
+      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+      await user.click(screen.getByRole("button", { name: "导出 Excel 报告" }));
+
+      await vi.waitFor(() => {
+        expect(toast.error).toHaveBeenCalledTimes(1);
+      });
+      expect(createObjectURLMock).not.toHaveBeenCalled();
+    });
+
+    it("shows a toast when the network request rejects", async () => {
+      const user = userEvent.setup();
+      fetchMock.mockRejectedValue(new Error("network down"));
+
+      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+      await user.click(screen.getByRole("button", { name: "导出 Excel 报告" }));
+
+      await vi.waitFor(() => {
+        expect(toast.error).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 });
 

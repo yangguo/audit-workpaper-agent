@@ -42,6 +42,15 @@ def test_get_cell_value_invalid_ref_returns_none(layout_workbook):
     assert _get_cell_value(ws, "not a cell") is None
 
 
+def test_get_cell_value_range_or_column_returns_none(layout_workbook):
+    """LLM-returned ranges/columns make openpyxl return a tuple; must not crash."""
+    ws = layout_workbook.active
+    # Column reference -> tuple of cells
+    assert _get_cell_value(ws, "A") is None
+    # Range reference -> tuple of rows
+    assert _get_cell_value(ws, "A1:A2") is None
+
+
 def test_get_cell_text_strips_constructed_marker(layout_workbook):
     ws = layout_workbook.active
     ws["A2"] = "用户清单"
