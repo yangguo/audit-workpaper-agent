@@ -5,6 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from review.evidence_agent import (
+    _item_summary,
     build_evidence_tools,
     investigate_sheet,
     should_run_evidence_agent,
@@ -63,12 +64,11 @@ def test_evidence_tools_list_search_and_read_only_return_indexed_content():
 
     listed = json.loads(tools["list_attachment_files"].invoke({"query": "user"}))
     assert listed["files"] == [{
-        "path": "SA-4c/user-list.txt",
-        "index": "1",
-        "rel_dir": "SA-4c",
+        "rel_path": "SA-4c/user-list.txt",
+        "filename": "user-list.txt",
         "file_type": "txt",
+        "status": "ok",
         "size": 18,
-        "extraction_status": "ok",
     }]
 
     searched = json.loads(tools["search_attachment_text"].invoke({"query": "administrator"}))
@@ -294,3 +294,35 @@ async def test_investigate_sheet_marks_non_json_agent_response_as_error():
 
     assert result["status"] == "error"
     assert result["unresolved"][0]["reason"] == "invalid_agent_json"
+
+
+def _make_embedded_item(rel_path: str, file_type: str = "png", size: int = 1000):
+    return AttachmentFile(
+        index="",
+        rel_dir=".embedded_media",
+        filename=rel_path.split("/")[-1],
+        rel_path=rel_path,
+        file_type=file_type,
+        description="",
+        status="binary",
+        extraction_status="binary",
+        extracted_text="",
+        size=size,
+    )
+
+
+def test_item_summary_marks_embedded_media_source_document():
+    item = _make_embedded_item(".embedded_media/2-备份日志.docx::image1.png")
+    s = _item_summary(item)
+    assert s["source_document"] == "2-备份日志.docx"
+    assert s["media_name"] == "image1.png"
+    assert s["rel_path"] == ".embedded_media/2-备份日志.docx::image1.png"
+
+
+def test_item_summary_omits_source_for_real_attachments():
+    item = _make_embedded_item("审计证据/PE-6/1-备份策略设置.docx")
+    # Need to set rel_path to not start with .embedded_media
+    object.__setattr__(item, "rel_path", "审计证据/PE-6/1-备份策略设置.docx")
+    s = _item_summary(item)
+    assert "source_document" not in s
+    assert "media_name" not in s

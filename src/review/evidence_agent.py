@@ -58,18 +58,21 @@ def _items(attachments: Dict[str, object]) -> List[Any]:
 
 
 def _item_summary(item: Any) -> Dict[str, object]:
-    return {
-        "path": str(getattr(item, "rel_path", "") or getattr(item, "filename", "")),
-        "index": str(getattr(item, "index", "") or ""),
-        "rel_dir": str(getattr(item, "rel_dir", "") or ""),
+    summary = {
+        "rel_path": str(getattr(item, "rel_path", "") or ""),
+        "filename": str(getattr(item, "filename", "") or ""),
         "file_type": str(getattr(item, "file_type", "") or ""),
+        "status": str(getattr(item, "status", "") or ""),
         "size": int(getattr(item, "size", 0) or 0),
-        "extraction_status": str(
-            getattr(item, "extraction_status", "")
-            or getattr(item, "status", "")
-            or "unknown"
-        ),
     }
+    rel_path = summary["rel_path"]
+    if rel_path.startswith(".embedded_media/"):
+        after_prefix = rel_path[len(".embedded_media/"):]
+        if "::" in after_prefix:
+            source_doc, media_name = after_prefix.split("::", 1)
+            summary["source_document"] = source_doc
+            summary["media_name"] = media_name
+    return summary
 
 
 def _source_text(attachments: Dict[str, object], item: Any) -> str:
