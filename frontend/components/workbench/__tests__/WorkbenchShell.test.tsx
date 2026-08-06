@@ -297,6 +297,27 @@ describe("WorkbenchShell", () => {
     expect(screen.getAllByText("证据 1")).toHaveLength(2);
     expect(screen.getByText("“执行描述原文”")).toBeInTheDocument();
   });
+
+  it("renders export button when reviewId is provided", () => {
+    render(
+      <WorkbenchShell
+        header={{
+          title: "审计底稿审阅",
+          subtitle: "会话 A",
+          statusLabel: "已完成",
+        }}
+        summaryMetrics={[]}
+        analysisSections={[]}
+        evidenceItems={[]}
+        progressSteps={[]}
+        toolTraces={[]}
+        reviewId="r123"
+        isEmpty={false}
+      />,
+    );
+
+    expect(screen.getByText("导出 Excel 报告")).toBeInTheDocument();
+  });
 });
 
 describe("ReviewIntakePanel", () => {
