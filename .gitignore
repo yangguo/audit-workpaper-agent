@@ -59,3 +59,6 @@ logs/
 
 # 审阅结果侧端存储（运行时产物）
 assets/results/
+
+# Virtual embedded-media directory created by build_attachment_index
+**/.embedded_media/
