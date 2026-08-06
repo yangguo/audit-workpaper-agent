@@ -1,5 +1,6 @@
 """Export review findings to structured report formats."""
 import io
+import json
 from typing import Any, Dict, List
 
 import openpyxl
@@ -46,9 +47,11 @@ def generate_findings_xlsx(findings: List[Dict[str, Any]]) -> bytes:
 
         evidence_refs = finding.get("evidence_refs", [])
         if isinstance(evidence_refs, list):
+            # Preserve the full reference objects (including the `attachment`
+            # field used by attachment-backed findings) as JSON text so the
+            # report round-trips the original evidence payload.
             evidence_str = "\n".join(
-                f"{ref.get('sheet', '')}!{ref.get('cell_or_range', '')}: {ref.get('excerpt', '')[:200]}"
-                for ref in evidence_refs
+                json.dumps(ref, ensure_ascii=False) for ref in evidence_refs
             )
         else:
             evidence_str = str(evidence_refs)

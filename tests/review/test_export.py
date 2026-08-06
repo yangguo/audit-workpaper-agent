@@ -73,3 +73,68 @@ def test_export_findings_missing_returns_404(client, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     res = client.get("/findings/notexist/export?format=xlsx")
     assert res.status_code == 404
+
+
+EXPECTED_HEADERS = [
+    "序号", "Sheet", "单元格", "问题类型", "严重级别", "风险类型",
+    "状态", "结论", "判定依据", "整改建议", "证据引用",
+    "交叉校验问题", "LLM 复核状态", "LLM 复核说明", "不确定原因",
+]
+
+
+def test_generate_findings_xlsx_uses_exact_15_headers():
+    findings = [{
+        "issue_type": "占位",
+        "evidence_refs": [],
+    }]
+    data = generate_findings_xlsx(findings)
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    ws = wb.active
+    headers = [ws.cell(row=1, column=c).value for c in range(1, 16)]
+    assert headers == EXPECTED_HEADERS
+
+
+def test_generate_findings_xlsx_preserves_attachment_in_evidence_refs():
+    findings = [{
+        "issue_type": "附件支撑缺失",
+        "evidence_refs": [{
+            "sheet": "",
+            "cell_or_range": "",
+            "attachment": "attachments/contracts/contract-001.pdf",
+            "excerpt": "合同条款摘录：付款周期…",
+        }, {
+            "sheet": "SA-2",
+            "cell_or_range": "B7",
+            "excerpt": "底稿单元格摘录",
+        }],
+    }]
+    data = generate_findings_xlsx(findings)
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    ws = wb.active
+    evidence_cell = ws.cell(row=2, column=11).value
+    # Must preserve both refs as JSON text, including the attachment path.
+    parsed = [json.loads(line) for line in evidence_cell.splitlines() if line]
+    assert any(
+        r.get("attachment") == "attachments/contracts/contract-001.pdf" for r in parsed
+    )
+    assert any(r.get("sheet") == "SA-2" and r.get("cell_or_range") == "B7" for r in parsed)
+    # Chinese characters must NOT be escaped to \uXXXX.
+    assert "\\u" not in evidence_cell
+    assert "付款周期" in evidence_cell
+
+
+def test_export_findings_empty_list_returns_404(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    results_dir = tmp_path / "assets" / "results"
+    results_dir.mkdir(parents=True)
+    payload = {
+        "review_id": "r-empty",
+        "created_at": "2026-08-06T00:00:00",
+        "source": "test.xlsx",
+        "stats": {"total_findings": 0, "by_severity": {}},
+        "findings": [],
+    }
+    (results_dir / "r-empty_findings.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    res = client.get("/findings/r-empty/export?format=xlsx")
+    assert res.status_code == 404
