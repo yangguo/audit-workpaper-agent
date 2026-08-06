@@ -575,6 +575,25 @@ async def investigate_sheet(
         }
     factory = agent_factory or create_agent
     _llm_stat("evidence_agent", "calls", 1)
+    # OpenAI's chat completions client rejects tools that don't have
+    # `strict: True` set in their function definition (see
+    # openai/lib/_parsing/_completions.py:validate_input_tools).
+    # `create_agent` calls `llm.bind_tools(tools)` internally without passing
+    # strict, so we monkey-patch the bound method to default it. Pydantic
+    # forbids normal attribute assignment on the model instance, so we use
+    # `object.__setattr__` to bypass.
+    if not agent_factory and not getattr(llm, "_strict_tools_patched", False):
+        _orig_bind_tools = llm.bind_tools
+        def _bind_tools_strict(*args, **kwargs):
+            kwargs.setdefault("strict", True)
+            return _orig_bind_tools(*args, **kwargs)
+        try:
+            object.__setattr__(llm, "bind_tools", _bind_tools_strict)
+        except Exception:
+            # If we can't patch on the model instance, leave it alone and
+            # hope create_agent doesn't re-bind without strict.
+            pass
+        object.__setattr__(llm, "_strict_tools_patched", True)
     try:
         agent = factory(
             model=llm,
