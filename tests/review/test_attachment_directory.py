@@ -287,3 +287,31 @@ def test_build_attachment_index_includes_docx_embedded_images(tmp_path):
     virtual = [it for it in idx["items"] if "embedded_media" in it.rel_path]
     assert virtual, "expected virtual attachment from embedded image"
     assert any(v.file_type == "png" for v in virtual)
+
+
+def test_extract_attachment_text_handles_legacy_via_converter(tmp_path, monkeypatch):
+    """Legacy .xls/.doc should be routed through the converter when available."""
+    from review import attachments, legacy_convert
+
+    class _FakeLegacy:
+        def convert_legacy_to_modern(self, src_path, dest_dir=None):
+            out = tmp_path / (src_path.stem + ".xlsx")
+            out.write_bytes(b"fake xlsx")
+            return out
+
+    def _fake_read_xlsx(_path):
+        return "converted content", "ok"
+
+    monkeypatch.setattr(
+        legacy_convert, "convert_legacy_to_modern", _FakeLegacy().convert_legacy_to_modern
+    )
+    monkeypatch.setattr(attachments, "_read_xlsx_file", _fake_read_xlsx)
+
+    fake = tmp_path / "old.xls"
+    fake.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")  # OLE/CFB magic
+    text, status = attachments._extract_attachment_text(fake)
+    # Either ok or unavailable depending on the patched _read_xlsx_file; main goal:
+    # the legacy branch was entered (no "unsupported" without calling converter)
+    assert status != "unsupported" or text != ""
+    assert text == "converted content"
+    assert status == "ok"

@@ -152,6 +152,17 @@ def _extract_attachment_text(path: Path) -> Tuple[str, str]:
     try:
         if suffix in _TEXT_EXTENSIONS:
             return _read_text_file(path)
+        if suffix in {".xls", ".doc"}:
+            from review.legacy_convert import convert_legacy_to_modern
+            converted = convert_legacy_to_modern(path)
+            if converted is None:
+                return "", "unsupported"
+            modern_suffix = converted.suffix.lower()
+            if modern_suffix == ".xlsx":
+                return _read_xlsx_file(converted)
+            if modern_suffix == ".docx":
+                return _read_docx_file(converted)
+            return "", "unsupported"
         if suffix == ".xlsx":
             return _read_xlsx_file(path)
         if suffix == ".docx":
