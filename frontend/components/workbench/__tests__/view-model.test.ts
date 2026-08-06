@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildWorkbenchViewModel } from "../view-model";
 
-const buildInput = (overrides: Parameters<typeof buildWorkbenchViewModel>[0]) => ({
+const buildInput = (
+  overrides: Partial<Parameters<typeof buildWorkbenchViewModel>[0]>,
+) => ({
   status: "completed" as const,
   archiveUrl: "",
   contentBlocks: [],
