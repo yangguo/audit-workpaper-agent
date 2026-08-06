@@ -1,8 +1,5 @@
 import io
 import zipfile
-from pathlib import Path
-
-import pytest
 
 from review.embedded_media import extract_docx_media
 
@@ -24,9 +21,7 @@ def test_extract_docx_media_returns_each_image(tmp_path):
         "image1.png": b"\x89PNG\r\n\x1a\n" + b"\x00" * 10,
         "photo.jpg": b"\xff\xd8\xff\xe0" + b"\x00" * 10,
     }))
-    dest = tmp_path / "out"
-    dest.mkdir()
-    items = extract_docx_media(docx, dest)
+    items = extract_docx_media(docx)
     assert len(items) == 2
     filenames = sorted(i.media_filename for i in items)
     assert filenames == ["image1.png", "photo.jpg"]
@@ -36,12 +31,12 @@ def test_extract_docx_media_returns_each_image(tmp_path):
 def test_extract_docx_media_handles_no_media(tmp_path):
     docx = tmp_path / "empty.docx"
     docx.write_bytes(_build_docx({}))
-    items = extract_docx_media(docx, tmp_path / "out")
+    items = extract_docx_media(docx)
     assert items == []
 
 
 def test_extract_docx_media_skips_invalid_zip(tmp_path):
     bogus = tmp_path / "bogus.docx"
     bogus.write_bytes(b"not a zip")
-    items = extract_docx_media(bogus, tmp_path / "out")
+    items = extract_docx_media(bogus)
     assert items == []

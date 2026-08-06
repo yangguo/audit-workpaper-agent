@@ -1,10 +1,9 @@
-"""Extract embedded media from DOCX/PPTX/PDF and route through the existing OCR pipeline."""
-import io
+"""Extract embedded media from DOCX and route through the existing OCR pipeline (DOCX support only for now; PPTX/PDF will be added in subsequent tasks)."""
 import logging
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence
+from typing import List
 
 _logger = logging.getLogger("review.embedded_media")
 
@@ -15,7 +14,7 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".jp2", ".webp", ".gif", ".bmp"}
 class ExtractedMedia:
     source_rel_path: str
     media_filename: str
-    media_index: int
+    media_index: int  # 1-based index of emitted images (contiguous)
     bytes: bytes
     file_type: str  # extension without dot, lower-case
 
@@ -29,13 +28,20 @@ def _safe_extract(zf: zipfile.ZipFile, member_name: str) -> bytes:
     return zf.read(member_name)
 
 
-def extract_docx_media(docx_path: Path, dest_dir: Path) -> List[ExtractedMedia]:
-    """Extract embedded images from a DOCX file. Returns [] on any error."""
+def extract_docx_media(docx_path: Path) -> List[ExtractedMedia]:
+    """Extract embedded images from a DOCX file. Returns [] on any error.
+
+    The returned ``ExtractedMedia.media_index`` is a 1-based index of emitted
+    images (not of ``word/media/`` entries), so it is always contiguous starting
+    at 1. The bytes are surfaced via ``ExtractedMedia.bytes``; callers are
+    responsible for any on-disk persistence.
+    """
     out: List[ExtractedMedia] = []
     try:
         with zipfile.ZipFile(str(docx_path)) as zf:
             names = sorted(n for n in zf.namelist() if n.startswith("word/media/"))
-            for idx, name in enumerate(names, start=1):
+            media_index = 0
+            for name in names:
                 media_filename = Path(name).name
                 ext = Path(media_filename).suffix.lower()
                 if ext not in _IMAGE_EXTS:
@@ -44,10 +50,11 @@ def extract_docx_media(docx_path: Path, dest_dir: Path) -> List[ExtractedMedia]:
                     data = _safe_extract(zf, name)
                 except Exception:
                     continue
+                media_index += 1
                 out.append(ExtractedMedia(
                     source_rel_path=docx_path.name,
                     media_filename=media_filename,
-                    media_index=idx,
+                    media_index=media_index,
                     bytes=data,
                     file_type=ext.lstrip("."),
                 ))
