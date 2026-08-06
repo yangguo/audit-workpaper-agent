@@ -1,4 +1,4 @@
-"""Extract embedded media from DOCX and route through the existing OCR pipeline (DOCX support only for now; PPTX/PDF will be added in subsequent tasks)."""
+"""Extract embedded media from DOCX and route through the existing OCR pipeline (DOCX and PPTX support; PDF will be added in a subsequent task)."""
 import logging
 import zipfile
 from dataclasses import dataclass
@@ -70,7 +70,8 @@ def extract_pptx_media(pptx_path: Path) -> List[ExtractedMedia]:
     try:
         with zipfile.ZipFile(str(pptx_path)) as zf:
             names = sorted(n for n in zf.namelist() if n.startswith("ppt/media/"))
-            for idx, name in enumerate(names, start=1):
+            media_index = 0
+            for name in names:
                 media_filename = Path(name).name
                 ext = Path(media_filename).suffix.lower()
                 if ext not in _IMAGE_EXTS:
@@ -79,10 +80,11 @@ def extract_pptx_media(pptx_path: Path) -> List[ExtractedMedia]:
                     data = _safe_extract(zf, name)
                 except Exception:
                     continue
+                media_index += 1
                 out.append(ExtractedMedia(
                     source_rel_path=pptx_path.name,
                     media_filename=media_filename,
-                    media_index=idx,
+                    media_index=media_index,
                     bytes=data,
                     file_type=ext.lstrip("."),
                 ))
