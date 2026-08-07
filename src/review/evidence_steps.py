@@ -7,9 +7,11 @@ from typing import Dict, List, Optional
 from openpyxl.utils import get_column_letter
 
 from review.attachments import (
+    EVIDENCE_GUIDANCE,
     _extract_attachment_refs,
     _match_attachment_items,
     _verify_attachment_evidence_refs,
+    build_evidence_inventory,
 )
 from review.constants import EVIDENCE_KEYWORDS
 from review.excel_utils import _detect_layout, _get_cell_value, _normalize_sheet_id, _truncate
@@ -204,10 +206,17 @@ async def _llm_check_evidence_vs_steps(
     )
 
     id_to_case = {int(c.get("id")): c for c in cases if isinstance(c.get("id"), int)}
+    # Build the evidence inventory once so every chunk sent to the LLM sees
+    # the same list of real attachments + embedded media. Guidance is also
+    # prepended to each user prompt so the LLM applies it per chunk.
+    inventory = build_evidence_inventory(attachments)
+    guidance_prefix = (EVIDENCE_GUIDANCE + "\n") if inventory else ""
     for start in range(0, len(cases), max(1, int(batch_size))):
         chunk = cases[start: start + max(1, int(batch_size))]
         payload = {"sheet": ws_title, "items": chunk}
-        user_prompt = "请按要求逐条复核以下记录：\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+        if inventory:
+            payload["available_evidence"] = inventory
+        user_prompt = guidance_prefix + "请按要求逐条复核以下记录：\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
         def _consume_results(objs: List[object]) -> None:
             for obj in objs:
@@ -355,7 +364,9 @@ async def _llm_check_evidence_vs_steps(
                 _llm_stat(stage, "fallback_single", 1)
                 for item in chunk:
                     payload1 = {"sheet": ws_title, "items": [item]}
-                    user_prompt1 = "请按要求逐条复核以下记录：\n" + json.dumps(payload1, ensure_ascii=False, indent=2)
+                    if inventory:
+                        payload1["available_evidence"] = inventory
+                    user_prompt1 = guidance_prefix + "请按要求逐条复核以下记录：\n" + json.dumps(payload1, ensure_ascii=False, indent=2)
                     parsed1, err1 = await _llm_request_json_list(
                         llm=llm, system_prompt=system_prompt, user_prompt=user_prompt1,
                         stage=stage, max_attempts=3,

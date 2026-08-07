@@ -131,3 +131,52 @@ async def test_llm_check_evidence_vs_steps_includes_agent_evidence(monkeypatch):
     assert captured
     assert "admin,administrator" in str(captured[0])
     assert "SA-1/users.txt" in str(captured[0])
+
+
+def test_evidence_steps_prompt_includes_evidence_inventory(monkeypatch):
+    """The evidence_steps review prompt should include the attachment inventory."""
+    from review import evidence_steps as es_mod
+    from review import llm as llm_mod
+
+    captured = {}
+
+    async def fake_chat(*, llm, messages, stage, max_attempts=2, max_tokens=4096):
+        captured["messages"] = messages
+        return json.dumps({"results": []})
+
+    monkeypatch.setattr(llm_mod, "_llm_chat", fake_chat)
+
+    # Build minimal ws with a row that triggers evidence matching
+    ws = _build_ws_with_evidence_ref()
+
+    # Build attachments dict containing one real + one embedded item.
+    # The preview item is keyed by index "1" so the LLM path is reached:
+    # row B5 references "附件1" which matches that index.
+    attached = AttachmentPreviewItem(
+        index="1", rel_dir="d", filename="a.png", rel_path="d/a.png",
+        file_type="png", description="用户清单截图", status="OK",
+    )
+    attachments = {
+        "items": [
+            attached,
+            {"rel_path": ".embedded_media/test.docx::image1.png", "status": "binary", "file_type": "png", "extracted_text": ""},
+            {"rel_path": "审计证据/test.txt", "status": "ok", "file_type": "txt", "extracted_text": "用户清单"},
+        ],
+        "by_filename": {"a.png": [attached]},
+        "by_rel_path": {"d\\a.png": [attached]},
+        "by_index": {"1": [attached]},
+        "by_sheet_norm": {},
+    }
+
+    import asyncio
+    asyncio.run(es_mod._llm_check_evidence_vs_steps(
+        llm=None, ws_title="TEST", ws=ws,
+        attachments=attachments, attachments_preview=attachments,
+    ))
+
+    # Inventory markers must appear in the user prompt (which carries the payload).
+    user_msg = next(m for m in captured["messages"] if m["role"] == "user")
+    assert "证据清单" in user_msg["content"] or "证据不足" in user_msg["content"]
+
+
+
