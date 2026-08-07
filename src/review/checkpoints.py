@@ -11,7 +11,12 @@ from openpyxl.utils import get_column_letter
 
 from review.constants import CHECKPOINT_VOCAB
 from review.excel_utils import _build_sheet_text_for_llm, _get_cell_value, _truncate
-from review.attachments import _attachments_context_for_sheet, _verify_attachment_evidence_refs
+from review.attachments import (
+    EVIDENCE_GUIDANCE,
+    _attachments_context_for_sheet,
+    _verify_attachment_evidence_refs,
+    build_evidence_inventory,
+)
 from review.llm import _llm_request_json_list, _llm_stat
 from review.models import Finding, _SEVERITY_FROM_CHINESE
 from review.validation import _verify_evidence_refs
@@ -180,6 +185,9 @@ async def _llm_check_sheet_by_checkpoints(
 
     findings: List[Finding] = []
     cell_ref_re = re.compile(r"^[A-Z]{1,3}\d{1,7}$")
+    inventory = build_evidence_inventory(attachments)
+    if inventory:
+        system_prompt = system_prompt + "\n" + EVIDENCE_GUIDANCE + "\n" + inventory
     for start in range(0, len(deduped), max(1, int(batch_size))):
         chunk = deduped[start: start + max(1, int(batch_size))]
         end = start + len(chunk)

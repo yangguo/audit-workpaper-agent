@@ -132,3 +132,41 @@ async def test_llm_check_sheet_by_checkpoints_degrades_on_failure(monkeypatch):
     assert len(findings) == 1
     assert findings[0].status == "unknown"
     assert findings[0].issue_type == "LLM判定：检查要点复核失败"
+
+
+def test_checkpoints_prompt_includes_evidence_inventory(monkeypatch):
+    """The checkpoints review prompt should include attachment inventory."""
+    from review import checkpoints as cp
+    from review import llm as llm_mod
+
+    captured = {}
+
+    async def fake_chat(*, llm, messages, stage, max_attempts=2, max_tokens=4096):
+        captured["messages"] = messages
+        return json.dumps({"results": []})
+
+    monkeypatch.setattr(llm_mod, "_llm_chat", fake_chat)
+
+    # Build minimal ws
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A5"] = "测试检查要点"
+
+    # Build minimal attachments
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/test.docx::image1.png", "status": "binary", "file_type": "png", "extracted_text": ""},
+            {"rel_path": "审计证据/test.txt", "status": "ok", "file_type": "txt", "extracted_text": "hello"},
+        ],
+    }
+
+    import asyncio
+    asyncio.run(cp._llm_check_sheet_by_checkpoints(
+        llm=None, ws_title="TEST", ws=ws,
+        checkpoints=["检查点1"], attachments=attachments, attachments_preview=attachments,
+        on_progress=None,
+    ))
+
+    # Check the prompt includes inventory
+    sys_msg = next(m for m in captured["messages"] if m["role"] == "system")
+    assert "证据清单" in sys_msg["content"] or "证据清单" in str(captured["messages"])
