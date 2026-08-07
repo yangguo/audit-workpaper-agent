@@ -5,8 +5,9 @@ import shutil
 import subprocess
 import zipfile
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
 import openpyxl
@@ -176,6 +177,84 @@ def _extract_attachment_text(path: Path) -> Tuple[str, str]:
     except Exception:
         return "", "unavailable"
     return "", "unsupported"
+
+
+@dataclass
+class EvidenceEntry:
+    rel_path: str
+    file_type: str
+    status: str
+    excerpt: str
+    source_document: Optional[str] = None
+    is_embedded: bool = False
+
+
+EVIDENCE_GUIDANCE = (
+    "重要：[证据清单] 段列出本sheet附件目录中真实可用的文件及其嵌入图。\n"
+    "若执行描述引用了「《某文档》」，从清单中找出实际路径作为 evidence_refs.attachment。\n"
+    "若证据是截图（密码策略截图、系统参数界面），DOCX/PPTX 中抽取的嵌入图位于 .embedded_media/ 路径。\n"
+    "不要把 [证据清单] 中不存在的文件写进 evidence_refs。\n"
+    "不要因为「执行描述里没明说截图」就判证据不足——先看 [证据清单] 中是否真的缺。\n"
+)
+
+
+def build_evidence_inventory(
+    attachments: Optional[Dict[str, object]],
+    *,
+    max_entries: int = 30,
+    max_embedded: int = 12,
+    max_excerpt_chars: int = 200,
+) -> str:
+    """Build a compact evidence inventory for V1 review prompts.
+
+    Lists real attachments (with status + excerpt) and embedded media
+    (grouped by source document). Capped to keep prompt size bounded.
+    Returns "" if attachments is empty/None.
+    """
+    if not attachments:
+        return ""
+    items = attachments.get("items", []) or []
+    if not items:
+        return ""
+
+    real = []
+    embedded_by_source: Dict[str, List[str]] = {}
+    for it in items:
+        rel = getattr(it, "rel_path", None) if not isinstance(it, dict) else it.get("rel_path")
+        status = getattr(it, "status", "") if not isinstance(it, dict) else it.get("status", "")
+        file_type = getattr(it, "file_type", "") if not isinstance(it, dict) else it.get("file_type", "")
+        excerpt = getattr(it, "extracted_text", "") if not isinstance(it, dict) else it.get("extracted_text", "")
+        if not rel:
+            continue
+        if rel.startswith(".embedded_media/") and "::" in rel:
+            after = rel[len(".embedded_media/"):]
+            source, media_name = after.split("::", 1)
+            embedded_by_source.setdefault(source, []).append(media_name)
+        else:
+            excerpt_short = (excerpt or "")[:max_excerpt_chars].replace("\n", " ").strip()
+            real.append((rel, status or "unknown", excerpt_short))
+
+    total_real = len(real)
+    total_embedded = sum(len(v) for v in embedded_by_source.values())
+    real = real[:max_entries]
+    embedded_pairs = []
+    for src, names in embedded_by_source.items():
+        for n in names:
+            embedded_pairs.append((src, n))
+    embedded_pairs = embedded_pairs[:max_embedded]
+
+    lines = [f"[证据清单（前 {min(total_real, max_entries)} 个附件 + 前 {min(total_embedded, max_embedded)} 张嵌入图，目录实际有 {total_real} 项 + {total_embedded} 张）]\n"]
+    lines.append(f"== 真实附件（{total_real} 项，列出前 {len(real)}） ==")
+    for rel, status, ex in real:
+        ex_part = f" — 摘录: {ex}" if ex else ""
+        lines.append(f"[{status}] {rel}{ex_part}")
+    lines.append("")
+    lines.append(f"== 嵌入图（{total_embedded} 张，按来源文档分组） ==")
+    for src, n in embedded_pairs:
+        lines.append(f"  [{n}] 来自 {src}")
+    lines.append("")
+    lines.append("引用示例：evidence_refs.attachment = \".embedded_media/<原文档>::<图名>.<ext>\"")
+    return "\n".join(lines)
 
 
 def build_attachment_index(attachments_dir: str) -> Dict[str, object]:

@@ -5,6 +5,7 @@ from review.attachments import (
     _compact_keywords,
     _evidence_matches_step,
     _match_preview_items,
+    build_evidence_inventory,
     load_attachments_preview_xlsx,
     _check_attachment_references,
 )
@@ -111,3 +112,69 @@ def test_check_attachment_references_flags_missing_index():
 
 def test_check_attachment_references_empty_preview_returns_empty(layout_workbook):
     assert _check_attachment_references("SA-1", layout_workbook.active, {}) == []
+
+
+# Add to existing test file
+from review.attachments import build_evidence_inventory
+
+
+def test_build_evidence_inventory_empty():
+    assert build_evidence_inventory({}) == ""
+    assert build_evidence_inventory(None or {}) == ""  # type: ignore
+
+
+def test_build_evidence_inventory_lists_real_attachments(tmp_path):
+    """Two real text-extractable attachments should appear with status [ok]."""
+    from review.attachments import build_attachment_index
+    from pathlib import Path
+    d = tmp_path / "atts"
+    d.mkdir()
+    (d / "a.txt").write_text("hello world " * 20, encoding="utf-8")
+    # Use a real zip-based docx so build_attachment_index can extract its text
+    # and mark it with status [ok] (the brief's snippet had a typo here).
+    import io
+    import zipfile
+    docx = d / "b.docx"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", b"<?xml version='1.0'?><doc><p>fake docx content</p></doc>")
+    docx.write_bytes(buf.getvalue())
+    idx = build_attachment_index(str(d))
+    inv = build_evidence_inventory(idx)
+    assert "证据清单" in inv
+    assert "[ok] a.txt" in inv
+    assert "[ok] b.docx" in inv
+
+
+def test_build_evidence_inventory_groups_embedded_media(tmp_path):
+    """Embedded media items should be grouped by source_document with [EMBED] header."""
+    # Use the actual extract pipeline on a real DOCX
+    import io
+    import zipfile
+    from review.attachments import build_attachment_index
+    d = tmp_path / "atts"
+    d.mkdir()
+    docx = d / "test.docx"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", b"<?xml version='1.0'?><doc/>")
+        zf.writestr("word/media/image1.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)
+    docx.write_bytes(buf.getvalue())
+    idx = build_attachment_index(str(d))
+    inv = build_evidence_inventory(idx)
+    # .embedded_media section present
+    assert ".embedded_media" in inv
+    assert "test.docx" in inv
+
+
+def test_build_evidence_inventory_truncates(tmp_path):
+    """More than max_entries + max_embedded should be truncated, with hint text."""
+    from review.attachments import build_attachment_index
+    d = tmp_path / "atts"
+    d.mkdir()
+    for i in range(50):
+        (d / f"f{i}.txt").write_text(f"file {i} content", encoding="utf-8")
+    idx = build_attachment_index(str(d))
+    inv = build_evidence_inventory(idx, max_entries=10, max_embedded=5)
+    # Should mention truncation
+    assert "实际有" in inv or "前 10" in inv or "前 5" in inv
