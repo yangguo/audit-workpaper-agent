@@ -235,6 +235,7 @@ async def run_review(
         # 6) A-C correspondence LLM judgement
         _, ac_findings = await _llm_check_procedure_pairs(
             llm=llm, wb=wb, target_sheets=[sheet],
+            attachments=attachments,
         )
         findings += ac_findings
         _emit_progress(on_progress, "procedure_pairs", sheet, findings, f"完成 {sheet} 程序配对检查")

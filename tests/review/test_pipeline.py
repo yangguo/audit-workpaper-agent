@@ -155,7 +155,7 @@ async def test_run_review_honors_reviewable_sheet_scope(monkeypatch):
 
     reviewed: list = []
 
-    async def _spy(llm, wb, target_sheets):
+    async def _spy(llm, wb, target_sheets, attachments=None):
         reviewed.extend(target_sheets)
         return {}, []
 
@@ -201,7 +201,7 @@ async def test_run_review_resolves_loose_sheet_name(monkeypatch):
 
     reviewed: list = []
 
-    async def _spy(llm, wb, target_sheets):
+    async def _spy(llm, wb, target_sheets, attachments=None):
         reviewed.extend(target_sheets)
         return {}, []
 
@@ -315,7 +315,7 @@ async def test_run_review_partial_match_warns_but_does_not_fall_back(monkeypatch
 
     reviewed: list = []
 
-    async def _spy(llm, wb, target_sheets):
+    async def _spy(llm, wb, target_sheets, attachments=None):
         reviewed.append(list(target_sheets))
         return {}, []
 
