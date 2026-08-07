@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from openpyxl.utils import get_column_letter
 
+from review.attachments import EVIDENCE_GUIDANCE, build_evidence_inventory
 from review.constants import EVIDENCE_KEYWORDS, INTERVIEW_ONLY_KEYWORDS, OS_DB_KEYWORDS
 from review.excel_utils import _detect_layout, _extract_sheet_text_cells, _get_cell_value, _truncate
 from review.llm import _llm_chat, _llm_stat, _try_parse_json
@@ -429,6 +430,8 @@ async def _llm_judge_procedure_pair(
     llm,
     standard_text: str,
     execution_text: str,
+    inventory: Optional[str] = None,
+    guidance: str = "",
 ) -> Tuple[bool, Optional[bool], str, str]:
     """Judge whether execution satisfies the standard program.
 
@@ -486,6 +489,11 @@ async def _llm_judge_procedure_pair(
         f"{_clip(execution_text, 900)}\n\n"
         "请判断C列执行程序是否符合A列标准要求。"
     )
+    # Prepend the sheet's attachment inventory so the judgement can tell a
+    # genuinely missing evidence file from one that simply is not named in the
+    # execution text. Both prompt variants above reuse this same user_prompt.
+    if inventory:
+        user_prompt = (guidance or "") + inventory + "\n\n" + user_prompt
 
     stage = "procedure_pair"
     try:
@@ -551,6 +559,7 @@ async def _llm_check_procedure_pairs(
     llm,
     start_row: int = 5,
     sleep_seconds: float = 0.2,
+    attachments: Optional[Dict[str, object]] = None,
 ) -> Tuple[Dict[str, object], List[Finding]]:
     skip_a_keywords = {
         "序号", "审计证据", "设计有效性测试结论", "执行有效性测试结论", "测试步骤", "抽样数量",
@@ -584,6 +593,11 @@ async def _llm_check_procedure_pairs(
     findings: List[Finding] = []
 
     keywords_like_procedure = ("询问", "访谈", "检查", "获取", "抽取", "观察", "复核", "比对", "重新执行", "分析", "确认", "审查")
+
+    # Build the evidence inventory once for the whole run: it is derived from
+    # the pinned attachment index and does not vary per sheet or per row.
+    inventory = build_evidence_inventory(attachments)
+    guidance = EVIDENCE_GUIDANCE if inventory else ""
 
     def _is_design_section(ws, header_row, standard_col):
         if not header_row or standard_col <= 0:
@@ -689,6 +703,7 @@ async def _llm_check_procedure_pairs(
 
                 success, is_match, reason, raw = await _llm_judge_procedure_pair(
                     llm=llm, standard_text=a_for_judge, execution_text=c_for_judge,
+                    inventory=inventory, guidance=guidance,
                 )
                 if success and (is_match is False or is_match is None):
                     if sheet_is_design and _looks_password_design_standard(a_for_judge) and _has_policy_evidence(c_for_judge):

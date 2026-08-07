@@ -134,6 +134,64 @@ async def test_llm_check_procedure_pairs_flags_mismatch(monkeypatch):
     assert any(f.issue_type.startswith("LLM判定：") for f in findings)
 
 
+@pytest.mark.asyncio
+async def test_procedure_pairs_prompt_includes_evidence_inventory(monkeypatch):
+    """The A-C judgement prompt should carry the attachment inventory.
+
+    Captures the messages at the fake LLM boundary rather than monkeypatching
+    ``_llm_chat``: ``procedure_pairs`` binds ``_llm_chat`` at import time, so
+    patching ``review.llm._llm_chat`` would not intercept the call here.
+    """
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    captured = []
+
+    class _CapturingRunnable:
+        async def ainvoke(self, messages):
+            captured.append(messages)
+            return AIMessage(content='{"status":"pass","reason":"符合","evidence_refs":[]}')
+
+    class _CapturingLLM:
+        def bind(self, **kwargs):
+            return _CapturingRunnable()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "标准审计程序"
+    ws["B1"] = "执行审计程序"
+    ws["A5"] = "审计期间获取系统用户清单并检查权限分配情况。"
+    ws["B5"] = "我们导出了系统用户清单并进行了权限核查与记录。"
+
+    # One real attachment + one embedded media item.
+    attachments = {
+        "items": [
+            {
+                "rel_path": "审计证据/用户清单.txt",
+                "status": "ok",
+                "file_type": "txt",
+                "extracted_text": "admin,administrator",
+            },
+            {
+                "rel_path": ".embedded_media/密码策略.docx::image1.png",
+                "status": "binary",
+                "file_type": "png",
+                "extracted_text": "",
+            },
+        ],
+    }
+
+    await _llm_check_procedure_pairs(
+        llm=_CapturingLLM(), wb=wb, target_sheets=[ws.title],
+        start_row=5, sleep_seconds=0, attachments=attachments,
+    )
+
+    assert captured, "LLM was never called"
+    user_text = "\n".join(
+        str(getattr(m, "content", m)) for m in captured[0]
+    )
+    assert "证据清单" in user_text or "证据不足" in user_text
+    assert "审计证据/用户清单.txt" in user_text
+
+
 def test_classify_mismatch_distinguishes_sa12_reasons():
     """Regression guard: SA-12 produced 5 P0 findings that all looked identical
     because they shared the generic '执行程序不符合标准审计程序' label.
