@@ -1,11 +1,48 @@
 import json
+import re
 
 import openpyxl
 import pytest
 from langchain_core.messages import AIMessage
 
-from review.pipeline import run_review, _parse_sheet_filter, _finding_to_dict
+from review.pipeline import run_review, _parse_sheet_filter, _finding_to_dict, _backfill_embedded_evidence_refs
 from review.models import Finding
+
+
+def test_backfill_embedded_evidence_refs_adds_missing_paths():
+    finding = {
+        "sheet": "SA-10",
+        "basis": "底稿引用了《SAP系统密码策略》<C22.SA-10-1>。截图 .embedded_media/sap密码策略.docx::image1.png 显示密码长度5。",
+        "evidence_refs": [
+            {"sheet": "SA-10", "cell_or_range": "C14", "attachment": "", "excerpt": "通过检查《SAP系统密码策略》"}
+        ],
+    }
+    out = _backfill_embedded_evidence_refs([finding])
+    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
+    assert ".embedded_media/sap密码策略.docx::image1.png" in atts
+
+
+def test_backfill_embedded_evidence_refs_no_duplicate():
+    finding = {
+        "sheet": "SA-10",
+        "basis": ".embedded_media/foo.docx::image1.png 已有。",
+        "evidence_refs": [
+            {"sheet": "SA-10", "cell_or_range": "", "attachment": ".embedded_media/foo.docx::image1.png", "excerpt": "x"}
+        ],
+    }
+    out = _backfill_embedded_evidence_refs([finding])
+    assert len(out[0]["evidence_refs"]) == 1
+
+
+def test_backfill_embedded_evidence_refs_handles_real_attachments():
+    finding = {
+        "sheet": "PE-6",
+        "basis": "见 审计证据/PE-6/C10-演练记录.pdf（含截图）。",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding])
+    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
+    assert "审计证据/PE-6/C10-演练记录.pdf" in atts
 
 
 class _FakeRunnable:

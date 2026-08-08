@@ -6,6 +6,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 import openpyxl
@@ -88,6 +89,51 @@ def _finding_to_dict(f: Finding) -> dict:
             d[k] = default
     d["severity_display"] = _SEVERITY_DISPLAY.get(f.severity, f.severity)
     return d
+
+
+_EMBEDDED_RE = re.compile(r"\.embedded_media/[^\s\)\]\}\,\"。，;]+")
+_REAL_ATTACH_RE = re.compile(r"(?<![/.])(审计证据/[^\s\)\]\}\,\"。，;]+\.[A-Za-z0-9]+)")
+
+
+def _backfill_embedded_evidence_refs(findings_dicts: List[dict]) -> List[dict]:
+    """Lift attachment paths mentioned in `basis` into `evidence_refs[].attachment`.
+
+    The V1 main review LLM frequently references `.embedded_media/...` paths or
+    real attachment paths in the `basis` text, but doesn't always populate the
+    structured `evidence_refs[].attachment` field. The UI relies on the
+    structured field to render the evidence panel; an empty `attachment`
+    leaves the user with no trace of what was actually inspected.
+
+    This pass is a no-op for findings whose evidence_refs already cover every
+    path that appears in their basis. It only adds missing entries.
+    """
+    if not findings_dicts:
+        return findings_dicts
+    for fnd in findings_dicts:
+        basis = fnd.get("basis") or ""
+        if not basis:
+            continue
+        refs = fnd.get("evidence_refs") or []
+        existing = {str(r.get("attachment") or "") for r in refs}
+        new_paths = []
+        for m in _EMBEDDED_RE.findall(basis):
+            p = m.rstrip(".,;，。，")
+            if p and p not in existing and p not in new_paths:
+                new_paths.append(p)
+        for m in _REAL_ATTACH_RE.findall(basis):
+            p = m.rstrip(".,;，。，")
+            if p and p not in existing and p not in new_paths:
+                new_paths.append(p)
+        for p in new_paths:
+            refs.append({
+                "sheet": fnd.get("sheet"),
+                "cell_or_range": "",
+                "attachment": p,
+                "excerpt": "",
+            })
+        if new_paths:
+            fnd["evidence_refs"] = refs
+    return findings_dicts
 
 
 def _sort_findings(findings: List[Finding]) -> List[Finding]:
@@ -271,6 +317,11 @@ async def run_review(
         d["cross_validate_issues"] = cross_issues.get(idx, [])
         d["challenge_verdict"] = challenge.get(idx)
         out.append(d)
+    # Lift attachment paths that the V1 LLM cited in `basis` text into the
+    # structured `evidence_refs[].attachment` field. Without this, the UI's
+    # evidence panel shows empty attachments because the LLM only mentioned
+    # `.embedded_media/...` in prose. Cheap post-process; doesn't change findings.
+    _backfill_embedded_evidence_refs(out)
 
     _emit_progress(on_progress, "done", "", findings_sorted, "审阅完成")
     stats = {
