@@ -45,6 +45,49 @@ def test_backfill_embedded_evidence_refs_handles_real_attachments():
     assert "审计证据/PE-6/C10-演练记录.pdf" in atts
 
 
+def test_backfill_embedded_evidence_refs_resolves_doc_name_to_embedded():
+    """`《doc_name》` references in basis should resolve to .embedded_media/<doc>::*.png paths."""
+    attachments = {
+        "items": [
+            {
+                "rel_path": ".embedded_media/doca.docx::image1.png",
+                "status": "binary",
+                "file_type": "png",
+            },
+            {
+                "rel_path": ".embedded_media/doca.docx::image2.png",
+                "status": "binary",
+                "file_type": "png",
+            },
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "底稿仅引用《doca》文档，未提供截图或导出文件作为直接证据。",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
+    assert ".embedded_media/doca.docx::image1.png" in atts
+    assert ".embedded_media/doca.docx::image2.png" in atts
+
+
+def test_backfill_embedded_evidence_refs_no_match_leaves_attachment_empty():
+    """Document name that doesn't match any attachment should not add refs."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/foo.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "引用了《完全不存在的文档》.",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    assert out[0]["evidence_refs"] == []
+
+
 class _FakeRunnable:
     def __init__(self, content):
         self.content = content

@@ -191,10 +191,11 @@ class EvidenceEntry:
 
 EVIDENCE_GUIDANCE = (
     "重要：[证据清单] 段列出本sheet附件目录中真实可用的文件及其嵌入图。\n"
-    "若执行描述引用了「《某文档》」，从清单中找出实际路径作为 evidence_refs.attachment。\n"
-    "若证据是截图（密码策略截图、系统参数界面），DOCX/PPTX 中抽取的嵌入图位于 .embedded_media/ 路径。\n"
+    "若执行描述引用了「《某文档》」，**必须**从 [证据清单] 找出对应路径写入 evidence_refs.attachment 字段——不要只用文档名引用。\n"
+    "若证据是截图（密码策略截图、系统参数界面），DOCX/PPTX 中抽取的嵌入图位于 .embedded_media/ 路径，格式 .embedded_media/<原文档>::<图名>.<ext>。\n"
     "不要把 [证据清单] 中不存在的文件写进 evidence_refs。\n"
     "不要因为「执行描述里没明说截图」就判证据不足——先看 [证据清单] 中是否真的缺。\n"
+    "evidence_refs.attachment 字段是必填结构化字段，每条 evidence_ref 必须填实际文件路径或 .embedded_media/ 路径。\n"
 )
 
 

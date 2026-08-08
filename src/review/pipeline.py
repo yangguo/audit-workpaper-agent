@@ -93,22 +93,67 @@ def _finding_to_dict(f: Finding) -> dict:
 
 _EMBEDDED_RE = re.compile(r"\.embedded_media/[^\s\)\]\}\,\"。，;]+")
 _REAL_ATTACH_RE = re.compile(r"(?<![/.])(审计证据/[^\s\)\]\}\,\"。，;]+\.[A-Za-z0-9]+)")
+# Common audit verb phrases that appear right before `《doc》` references.
+# When matched, the doc reference is more likely to mean an evidence document.
+_DOC_REF_HINT_RE = re.compile(
+    r"(引用了?|获取了?|提供了?|未提供|覆盖|查看|查阅|审阅|核验|附|附件|参考|摘自|见|见附|对照|依据|根据)"
+    r"\s*[「『‘“《]([^「」『『》»”]+?)[」》』”»」』]"
+)
 
 
-def _backfill_embedded_evidence_refs(findings_dicts: List[dict]) -> List[dict]:
-    """Lift attachment paths mentioned in `basis` into `evidence_refs[].attachment`.
+def _build_doc_to_media_map(attachments):
+    """Map a document-name stem to its embedded-media paths.
 
-    The V1 main review LLM frequently references `.embedded_media/...` paths or
-    real attachment paths in the `basis` text, but doesn't always populate the
-    structured `evidence_refs[].attachment` field. The UI relies on the
-    structured field to render the evidence panel; an empty `attachment`
-    leaves the user with no trace of what was actually inspected.
+    The V1 LLM often writes `《SAP系统密码策略》` while the attachment index
+    stores `sap系统数据库密码策略.docx`. A simple substring match in either
+    direction lets us resolve `《...》` references to `.embedded_media/...` paths.
+    Keys are lowercased for case-insensitive matching.
+    """
+    if not attachments:
+        return {}
+    items = attachments.get("items", []) or []
+    by_stem = {}
+    for it in items:
+        rel = getattr(it, "rel_path", None) if not isinstance(it, dict) else it.get("rel_path", "")
+        if not rel or not rel.startswith(".embedded_media/"):
+            continue
+        after = rel[len(".embedded_media/"):]
+        if "::" not in after:
+            continue
+        source_doc, _media = after.split("::", 1)
+        for stem_candidate in (source_doc, source_doc.rsplit(".", 1)[0] if "." in source_doc else source_doc):
+            by_stem.setdefault(stem_candidate.lower(), []).append(rel)
+    return by_stem
 
-    This pass is a no-op for findings whose evidence_refs already cover every
-    path that appears in their basis. It only adds missing entries.
+
+def _resolve_doc_name_to_media(doc_name, doc_to_media):
+    if not doc_name or not doc_to_media:
+        return []
+    norm = doc_name.lower()
+    if norm in doc_to_media:
+        return list(doc_to_media[norm])
+    for stem, paths in doc_to_media.items():
+        if norm in stem or stem in norm:
+            return list(paths)
+    return []
+
+
+def _backfill_embedded_evidence_refs(findings_dicts, attachments=None):
+    """Lift attachment paths into `evidence_refs[].attachment`.
+
+    Three passes, in order:
+    1. Direct paths in `basis` (`.embedded_media/...`, `审计证据/...`).
+    2. Document-name references in `basis` (e.g. `《SAP系统密码策略》`) resolved
+       against the attachment index's embedded-media entries.
+    3. (No-op) — placeholder for future heuristics.
+
+    Cheap post-process; doesn't change the LLM's findings text, only
+    fills the structural `evidence_refs[].attachment` field so the UI can
+    render what was actually inspected.
     """
     if not findings_dicts:
         return findings_dicts
+    doc_to_media = _build_doc_to_media_map(attachments)
     for fnd in findings_dicts:
         basis = fnd.get("basis") or ""
         if not basis:
@@ -124,6 +169,13 @@ def _backfill_embedded_evidence_refs(findings_dicts: List[dict]) -> List[dict]:
             p = m.rstrip(".,;，。，")
             if p and p not in existing and p not in new_paths:
                 new_paths.append(p)
+        for m in _DOC_REF_HINT_RE.finditer(basis):
+            doc_name = m.group(2).strip()
+            if not doc_name or len(doc_name) < 2:
+                continue
+            for p in _resolve_doc_name_to_media(doc_name, doc_to_media):
+                if p not in existing and p not in new_paths:
+                    new_paths.append(p)
         for p in new_paths:
             refs.append({
                 "sheet": fnd.get("sheet"),
@@ -318,10 +370,11 @@ async def run_review(
         d["challenge_verdict"] = challenge.get(idx)
         out.append(d)
     # Lift attachment paths that the V1 LLM cited in `basis` text into the
-    # structured `evidence_refs[].attachment` field. Without this, the UI's
-    # evidence panel shows empty attachments because the LLM only mentioned
-    # `.embedded_media/...` in prose. Cheap post-process; doesn't change findings.
-    _backfill_embedded_evidence_refs(out)
+    # structured `evidence_refs[].attachment` field. Also resolve document
+    # names like `《SAP系统密码策略》` to their underlying embedded-media
+    # paths via the attachment index, so the UI's evidence panel can render
+    # what was actually inspected.
+    _backfill_embedded_evidence_refs(out, attachments)
 
     _emit_progress(on_progress, "done", "", findings_sorted, "审阅完成")
     stats = {
