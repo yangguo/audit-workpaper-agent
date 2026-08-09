@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { WorkbenchHeader } from "./WorkbenchHeader";
 import { EmptyStatePanel } from "./EmptyStatePanel";
 import { EvidenceListPanel } from "./EvidenceListPanel";
+import { EvidenceAnalysisPanel } from "./EvidenceAnalysisPanel";
 import { ResultSummaryCards } from "./ResultSummaryCards";
 import { AnalysisResultPanel } from "./AnalysisResultPanel";
 import { ProgressStatusPanel } from "./ProgressStatusPanel";
@@ -10,6 +11,7 @@ import { UnderstoodRequirementPanel } from "./UnderstoodRequirementPanel";
 import { ReviewArtifactPanel } from "./ReviewArtifactPanel";
 import type {
   AnalysisSection,
+  EvidenceAnalysis,
   EvidenceItem,
   ProgressStep,
   ReviewProgress,
@@ -29,6 +31,7 @@ export function WorkbenchShell(props: {
   summaryMetrics: SummaryMetric[];
   analysisSections: AnalysisSection[];
   evidenceItems: EvidenceItem[];
+  evidenceAnalysis?: EvidenceAnalysis;
   progressSteps: ProgressStep[];
   toolTraces: ToolTrace[];
   liveProgress?: ReviewProgress | null;
@@ -56,6 +59,9 @@ export function WorkbenchShell(props: {
             </section>
           )}
           <EvidenceListPanel items={props.evidenceItems} />
+          {props.evidenceAnalysis ? (
+            <EvidenceAnalysisPanel analysis={props.evidenceAnalysis} />
+          ) : null}
         </aside>
         <main className="space-y-4">
           {props.understoodRequirement ? (

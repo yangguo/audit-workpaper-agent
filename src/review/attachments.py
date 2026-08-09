@@ -277,6 +277,7 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
         path for path in root.rglob("*")
         if path.is_file()
         and not path.is_symlink()
+        and ".embedded_media" not in path.relative_to(root).parts
         and path.name not in _IGNORED_ATTACHMENT_NAMES
         and not path.name.startswith("~$")
     ]
@@ -289,6 +290,10 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
     by_index: Dict[str, List[AttachmentFile]] = defaultdict(list)
     by_sheet_norm: Dict[str, List[AttachmentFile]] = defaultdict(list)
     status_counts: Dict[str, int] = defaultdict(int)
+    # `rel_path` is the stable path exposed to prompts, findings, and the UI.
+    # Embedded entries intentionally use `::` there, while their on-disk names
+    # use `__` so they remain portable to filesystems that reject colons.
+    source_rel_path_by_logical_path: Dict[str, str] = {}
 
     for path in paths:
         relative_path = path.relative_to(root).as_posix()
@@ -308,6 +313,7 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
         items.append(item)
         by_filename[item.filename.lower()].append(item)
         normalized_path = _normalize_rel_path(item.rel_path)
+        source_rel_path_by_logical_path[normalized_path] = item.rel_path
         path_parts = normalized_path.split("/")
         for start in range(len(path_parts)):
             suffix = "/".join(path_parts[start:])
@@ -328,6 +334,7 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
         embedded_root = root / ".embedded_media"
         embedded_root.mkdir(parents=True, exist_ok=True)
         for path in list(paths):  # list() to snapshot, paths may be mutated below
+            source_rel_path = path.relative_to(root)
             suffix = path.suffix.lower()
             if suffix == ".docx":
                 media_items = extract_docx_media(path)
@@ -339,13 +346,17 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
                 continue
             for m in media_items:
                 # Windows rejects ':' in filenames; sanitize for the on-disk
-                # write while keeping the verbatim "::" form in the rel_path /
-                # filename metadata so callers and the test continue to match.
+                # write while keeping the verbatim "::" form in the logical
+                # metadata. Preserve the source document's relative directory
+                # in both forms so two same-named documents never share OCR
+                # bytes or a citation path.
                 disk_name = f"{path.name}__{m.media_filename}"
-                out_path = embedded_root / disk_name
+                out_path = embedded_root / source_rel_path.parent / disk_name
+                out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_bytes(m.bytes)
             for m in media_items:
-                rel = f".embedded_media/{path.name}::{m.media_filename}"
+                logical_source = source_rel_path.as_posix()
+                rel = f".embedded_media/{logical_source}::{m.media_filename}"
                 if any(it.rel_path == rel for it in items):
                     continue
                 item = AttachmentFile(
@@ -361,8 +372,11 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
                     size=len(m.bytes),
                 )
                 items.append(item)
-                by_filename[item.filename].append(item)
-                by_rel_path[item.rel_path].append(item)
+                by_filename[item.filename.lower()].append(item)
+                by_rel_path[_normalize_rel_path(item.rel_path)].append(item)
+                source_rel_path_by_logical_path[_normalize_rel_path(rel)] = (
+                    (Path(".embedded_media") / source_rel_path.parent / f"{path.name}__{m.media_filename}").as_posix()
+                )
                 # do NOT add to by_sheet_norm (no sheet context for embedded media)
                 status_counts["binary"] += 1
     except Exception as exc:
@@ -377,6 +391,7 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
         "by_index": dict(by_index),
         "by_sheet_norm": dict(by_sheet_norm),
         "status_counts": dict(status_counts),
+        "source_rel_path_by_logical_path": source_rel_path_by_logical_path,
     }
 
 
@@ -622,12 +637,30 @@ def _verify_attachment_evidence_refs(
     file path from surviving into a structured Finding while preserving a valid
     workbook-cell citation.
     """
-    if not attachments:
-        return list(evidence_refs)
     from review.excel_utils import _get_cell_value
     from review.validation import _verify_evidence_refs
 
     verified: List[dict] = []
+    if not attachments:
+        # An attachment citation cannot be verified without the pinned index.
+        # Preserve only an independently verifiable workbook-cell citation;
+        # otherwise fail closed rather than exposing an LLM-supplied filename.
+        for raw in evidence_refs:
+            if not isinstance(raw, dict):
+                continue
+            fallback = dict(raw)
+            had_attachment = bool(str(fallback.pop("attachment", "") or "").strip())
+            if not had_attachment:
+                verified.append(fallback)
+                continue
+            if not fallback.get("cell_or_range"):
+                continue
+            if ws is None:
+                verified.append(fallback)
+            else:
+                verified.extend(_verify_evidence_refs([fallback], ws))
+        return verified
+
     for raw in evidence_refs:
         if not isinstance(raw, dict):
             continue
@@ -635,9 +668,16 @@ def _verify_attachment_evidence_refs(
         if not attachment:
             verified.append(dict(raw))
             continue
-        filenames, rel_paths, indices = _extract_attachment_refs(attachment)
-        if not filenames and not rel_paths and not indices:
-            rel_paths = [attachment]
+        normalized_attachment = _normalize_rel_path(attachment)
+        indexed_paths = attachments.get("by_rel_path") or {}
+        if isinstance(indexed_paths, dict) and indexed_paths.get(normalized_attachment):
+            # Virtual embedded-media paths contain `::`; the generic filename
+            # regex would otherwise reduce them to their trailing image name.
+            filenames, rel_paths, indices = [], [attachment], []
+        else:
+            filenames, rel_paths, indices = _extract_attachment_refs(attachment)
+            if not filenames and not rel_paths and not indices:
+                rel_paths = [attachment]
         matched, _ = _match_attachment_items(
             attachments,
             filenames=filenames,
@@ -645,11 +685,18 @@ def _verify_attachment_evidence_refs(
             indices=indices,
         )
         excerpt = str(raw.get("excerpt", "") or "").strip()
-        source_matches = any(
-            excerpt and excerpt in _verified_attachment_text(attachments, item)
+        excerpt_matches = [
+            item
             for item in matched
-        )
-        if not matched or (excerpt and not source_matches):
+            if excerpt and excerpt in _verified_attachment_text(attachments, item)
+        ]
+        # An attachment name alone does not prove what was inspected. Keep it
+        # only when the finding carries a non-empty quote found in the pinned
+        # source text (including cached OCR text).
+        # A basename can resolve to multiple files. Pin the citation only when
+        # exactly one indexed source contains the quoted text; otherwise its
+        # source is ambiguous and must not survive as attachment evidence.
+        if not excerpt or len(excerpt_matches) != 1:
             fallback = dict(raw)
             fallback.pop("attachment", None)
             if fallback.get("cell_or_range"):
@@ -662,9 +709,40 @@ def _verify_attachment_evidence_refs(
         if ws is not None and cell and not _get_cell_value(ws, cell):
             continue
         normalized = dict(raw)
-        normalized["attachment"] = str(matched[0].rel_path or matched[0].filename or attachment)
+        matched_item = excerpt_matches[0]
+        normalized["attachment"] = str(
+            matched_item.rel_path or matched_item.filename or attachment
+        )
         verified.append(normalized)
     return verified
+
+
+def format_evidence_refs_for_basis(
+    evidence_refs: Sequence[dict],
+    *,
+    max_refs: int = 3,
+    max_excerpt_chars: int = 200,
+) -> str:
+    """Render verified evidence as readable citations in a finding basis."""
+    rendered: List[str] = []
+    for ref in evidence_refs[:max(0, max_refs)]:
+        if not isinstance(ref, dict):
+            continue
+        excerpt = str(ref.get("excerpt", "") or "").strip()
+        if not excerpt:
+            continue
+        attachment = str(ref.get("attachment", "") or "").strip()
+        if attachment:
+            location = f"附件：{attachment}"
+        else:
+            location = "!".join(
+                value for value in (
+                    str(ref.get("sheet", "") or "").strip(),
+                    str(ref.get("cell_or_range", "") or "").strip(),
+                ) if value
+            )
+        rendered.append(f"{location or '未定位'}: {excerpt[:max_excerpt_chars]}")
+    return "; ".join(rendered)
 
 
 def _attachments_context_for_sheet(ws, attachments: Dict[str, object], limit_chars: int = 12000) -> str:

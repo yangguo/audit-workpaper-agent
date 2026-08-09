@@ -66,6 +66,55 @@ describe("WorkbenchShell", () => {
     expect(screen.getByText("调用追踪")).toBeInTheDocument();
   });
 
+  it("shows evidence-agent analysis, OCR outcome, excerpts, and unresolved evidence", () => {
+    render(
+      <WorkbenchShell
+        {...baseWorkbenchProps}
+        evidenceAnalysis={{
+          mode: "always",
+          runs: 1,
+          toolCalls: 3,
+          acceptedEvidence: 1,
+          unresolved: 1,
+          errors: 0,
+          ocr: { calls: 1, success: 1, errors: 0, timeouts: 0 },
+          details: [
+            {
+              sheet: "SA-1",
+              status: "completed",
+              toolCalls: 3,
+              ocr: { calls: 1, success: 1, errors: 0, timeouts: 0 },
+              evidence: [
+                {
+                  path: ".embedded_media/password-policy.docx::image1.png",
+                  fileType: "png",
+                  extractionStatus: "ocr",
+                  excerpt: "Password age must not exceed 90 days.",
+                  supports: "supports password-policy control",
+                  confidence: "high",
+                },
+              ],
+              unresolved: [{ request: "管理员截图", reason: "未提供截图" }],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("evidence-analysis")).toBeInTheDocument();
+    expect(screen.getByText("证据分析")).toBeInTheDocument();
+    expect(
+      screen.getByText("MinerU OCR：调用 1 · 成功 1 · 失败 0 · 超时 0"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTitle(".embedded_media/password-policy.docx::image1.png"),
+    ).toHaveTextContent(".embedded_media/password-policy.docx::image1.png");
+    expect(
+      screen.getByText("“Password age must not exceed 90 days.”"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/未提供截图/)).toBeInTheDocument();
+  });
+
   it("shows the empty workbench call to action when no evidence or result exists", () => {
     render(
       <WorkbenchShell
@@ -293,6 +342,11 @@ describe("WorkbenchShell", () => {
                     cell_or_range: "D12",
                     excerpt: "执行描述原文",
                   },
+                  {
+                    attachment:
+                      ".embedded_media/password-policy.docx::image1.png",
+                    excerpt: "密码最小长度为 12 个字符",
+                  },
                 ],
               },
             ],
@@ -323,6 +377,12 @@ describe("WorkbenchShell", () => {
     expect(screen.getByText("“权限清单原文”")).toBeInTheDocument();
     expect(screen.getAllByText("证据 1")).toHaveLength(2);
     expect(screen.getByText("“执行描述原文”")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "附件：.embedded_media/password-policy.docx::image1.png",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("“密码最小长度为 12 个字符”")).toBeInTheDocument();
   });
 
   it("renders export button when reviewId is provided", () => {

@@ -176,6 +176,102 @@ def test_ocr_tool_uploads_only_indexed_binary_file_and_caches_verified_text(tmp_
     assert validated["evidence"][0]["path"] == "SA-4c/screenshot.png"
 
 
+def test_ocr_tool_reads_docx_embedded_image_from_its_logical_evidence_path(tmp_path):
+    """The stable `::` citation path must still resolve to the extracted file."""
+    import io
+    import zipfile
+
+    from review.attachments import build_attachment_index
+
+    attachments_dir = tmp_path / "attachments"
+    attachments_dir.mkdir()
+    document = attachments_dir / "password-policy.docx"
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as docx:
+        docx.writestr("word/document.xml", b"<?xml version='1.0'?><doc/>")
+        docx.writestr("word/media/screenshot.png", b"\x89PNG\r\n\x1a\nembedded-image")
+    document.write_bytes(archive.getvalue())
+    index = build_attachment_index(str(attachments_dir))
+    logical_path = ".embedded_media/password-policy.docx::screenshot.png"
+    client_calls = []
+
+    class _FakeMinerU:
+        def parse_file(self, path, **kwargs):
+            client_calls.append((path, kwargs))
+            return MinerUResult(
+                status="ok",
+                text="密码最小长度为 12 个字符",
+                provider="mineru-lightweight",
+            )
+
+    tools = {tool.name: tool for tool in build_evidence_tools(index, mineru_client=_FakeMinerU())}
+    result = json.loads(tools["ocr_attachment"].invoke({"path": logical_path}))
+
+    assert result["status"] == "ok"
+    assert result["path"] == logical_path
+    assert client_calls[0][0].is_file()
+    assert client_calls[0][0].name == "password-policy.docx__screenshot.png"
+    assert index["ocr_by_path"][logical_path]["content"] == "密码最小长度为 12 个字符"
+
+
+def test_ocr_tool_reads_real_pdf_embedded_image_from_its_logical_evidence_path(tmp_path):
+    """A PDF image extracted by pypdf must reach MinerU through its virtual path."""
+    import zlib
+
+    from review.attachments import build_attachment_index
+
+    attachments_dir = tmp_path / "attachments"
+    attachments_dir.mkdir()
+    document = attachments_dir / "policy-evidence.pdf"
+    image_bytes = bytes([255, 255, 255, 0, 0, 0, 0, 0, 0, 255, 255, 255])
+    compressed_image = zlib.compress(image_bytes)
+    content = b"q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
+        b"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream"
+        % (len(compressed_image), compressed_image),
+    ]
+    header = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"
+    chunks = [header]
+    offsets = []
+    position = len(header)
+    for number, obj in enumerate(objects, start=1):
+        chunk = f"{number} 0 obj\n".encode() + obj + b"\nendobj\n"
+        offsets.append(position)
+        chunks.append(chunk)
+        position += len(chunk)
+    xref = b"xref\n0 6\n0000000000 65535 f \n" + b"".join(
+        f"{offset:010d} 00000 n \n".encode() for offset in offsets
+    )
+    trailer = b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % position
+    document.write_bytes(b"".join(chunks) + xref + trailer)
+
+    index = build_attachment_index(str(attachments_dir))
+    logical_path = ".embedded_media/policy-evidence.pdf::page1_img1.png"
+    client_calls = []
+
+    class _FakeMinerU:
+        def parse_file(self, path, **kwargs):
+            client_calls.append((path, kwargs))
+            return MinerUResult(
+                status="ok",
+                text="ADMIN ACCESS ENABLED",
+                provider="mineru-lightweight",
+            )
+
+    tools = {tool.name: tool for tool in build_evidence_tools(index, mineru_client=_FakeMinerU())}
+    result = json.loads(tools["ocr_attachment"].invoke({"path": logical_path}))
+
+    assert result["status"] == "ok"
+    assert result["path"] == logical_path
+    assert client_calls[0][0].is_file()
+    assert client_calls[0][0].name == "policy-evidence.pdf__page1_img1.png"
+    assert index["ocr_by_path"][logical_path]["content"] == "ADMIN ACCESS ENABLED"
+
+
 def test_ocr_tool_rejects_unindexed_path_and_preserves_remote_failure(tmp_path):
     index = _index(_item(
         filename="screenshot.png",

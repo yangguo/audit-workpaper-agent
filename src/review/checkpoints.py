@@ -16,6 +16,7 @@ from review.attachments import (
     _attachments_context_for_sheet,
     _verify_attachment_evidence_refs,
     build_evidence_inventory,
+    format_evidence_refs_for_basis,
 )
 from review.llm import _llm_request_json_list, _llm_stat
 from review.models import Finding, _SEVERITY_FROM_CHINESE
@@ -284,7 +285,7 @@ async def _llm_check_sheet_by_checkpoints(
                         ev_sheet = str(ref.get("sheet", "")).strip() or ws_title
                         ev_attachment = str(ref.get("attachment", "")).strip()
                         ev_excerpt = str(ref.get("excerpt", "")).strip()
-                        if ev_cell:
+                        if ev_cell or ev_attachment:
                             evidence_refs_list.append({
                                 "sheet": ev_sheet,
                                 "cell_or_range": ev_cell,
@@ -334,10 +335,7 @@ async def _llm_check_sheet_by_checkpoints(
                 if missing_text:
                     basis_parts.append(missing_text)
                 if evidence_refs_list:
-                    refs_text = "; ".join(
-                        f"{r.get('cell_or_range', '')}: {r.get('excerpt', '')[:200]}"
-                        for r in evidence_refs_list[:3] if r.get('excerpt')
-                    )
+                    refs_text = format_evidence_refs_for_basis(evidence_refs_list)
                     if refs_text:
                         basis_parts.append("引用: " + refs_text)
                 if unknown_reason:

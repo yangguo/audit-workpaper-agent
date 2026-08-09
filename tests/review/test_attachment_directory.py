@@ -238,6 +238,145 @@ def test_verify_attachment_evidence_refs_accepts_verified_ocr_excerpt():
     assert refs[0]["attachment"] == "SA-4c/screenshot.png"
 
 
+def test_verify_attachment_evidence_refs_drops_attachment_without_an_excerpt():
+    item = AttachmentFile(
+        index="1", rel_dir="SA-4c", filename="screenshot.png",
+        rel_path="SA-4c/screenshot.png", file_type="png", status="binary",
+        extraction_status="binary", extracted_text="", size=19,
+    )
+    attachments = {
+        "items": [item],
+        "by_filename": {"screenshot.png": [item]},
+        "by_rel_path": {"sa-4c/screenshot.png": [item]},
+        "by_index": {"1": [item]},
+        "by_sheet_norm": {},
+        "ocr_by_path": {
+            "sa-4c/screenshot.png": {
+                "status": "ok",
+                "content": "用户 admin 具有管理员权限",
+            },
+        },
+    }
+
+    refs = _verify_attachment_evidence_refs([
+        {
+            "sheet": "SA-4c",
+            "cell_or_range": "",
+            "attachment": "SA-4c/screenshot.png",
+            "excerpt": "",
+        }
+    ], attachments)
+
+    assert refs == []
+
+
+def test_verify_attachment_evidence_refs_pins_same_named_file_to_matching_excerpt():
+    """A basename-only citation must resolve to the file that contains its quote."""
+    first = AttachmentFile(
+        index="1", rel_dir="SA-1", filename="users.txt",
+        rel_path="SA-1/users.txt", file_type="txt", status="ok",
+        extraction_status="ok", extracted_text="alpha", size=5,
+    )
+    second = AttachmentFile(
+        index="2", rel_dir="SA-2", filename="users.txt",
+        rel_path="SA-2/users.txt", file_type="txt", status="ok",
+        extraction_status="ok", extracted_text="bravo", size=5,
+    )
+    attachments = {
+        "items": [first, second],
+        "by_filename": {"users.txt": [first, second]},
+        "by_rel_path": {
+            "sa-1/users.txt": [first],
+            "sa-2/users.txt": [second],
+        },
+        "by_index": {"1": [first], "2": [second]},
+        "by_sheet_norm": {},
+    }
+
+    refs = _verify_attachment_evidence_refs([
+        {
+            "sheet": "SA-2",
+            "attachment": "users.txt",
+            "excerpt": "bravo",
+        }
+    ], attachments)
+
+    assert refs == [{
+        "sheet": "SA-2",
+        "attachment": "SA-2/users.txt",
+        "excerpt": "bravo",
+    }]
+
+
+def test_verify_attachment_evidence_refs_drops_ambiguous_same_named_excerpt():
+    first = AttachmentFile(
+        index="1", rel_dir="SA-1", filename="users.txt",
+        rel_path="SA-1/users.txt", file_type="txt", status="ok",
+        extraction_status="ok", extracted_text="common", size=6,
+    )
+    second = AttachmentFile(
+        index="2", rel_dir="SA-2", filename="users.txt",
+        rel_path="SA-2/users.txt", file_type="txt", status="ok",
+        extraction_status="ok", extracted_text="common", size=6,
+    )
+    attachments = {
+        "items": [first, second],
+        "by_filename": {"users.txt": [first, second]},
+        "by_rel_path": {
+            "sa-1/users.txt": [first],
+            "sa-2/users.txt": [second],
+        },
+        "by_index": {"1": [first], "2": [second]},
+        "by_sheet_norm": {},
+    }
+
+    refs = _verify_attachment_evidence_refs([
+        {
+            "sheet": "SA-2",
+            "attachment": "users.txt",
+            "excerpt": "common",
+        }
+    ], attachments)
+
+    assert refs == []
+
+
+def test_verify_attachment_evidence_refs_drops_attachment_without_a_pinned_index():
+    """A quoted filename is not evidence when the source directory is absent."""
+    refs = _verify_attachment_evidence_refs([
+        {
+            "sheet": "SA-4c",
+            "cell_or_range": "",
+            "attachment": "SA-4c/screenshot.png",
+            "excerpt": "用户 admin 具有管理员权限",
+        }
+    ], {})
+
+    assert refs == []
+
+
+def test_verify_attachment_evidence_refs_keeps_valid_cell_when_index_is_absent():
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "SA-4c"
+    sheet["B5"] = "已核验管理员权限"
+
+    refs = _verify_attachment_evidence_refs([
+        {
+            "sheet": "SA-4c",
+            "cell_or_range": "B5",
+            "attachment": "SA-4c/screenshot.png",
+            "excerpt": "已核验管理员权限",
+        }
+    ], {}, ws=sheet)
+
+    assert refs == [{
+        "sheet": "SA-4c",
+        "cell_or_range": "B5",
+        "excerpt": "已核验管理员权限",
+    }]
+
+
 def test_check_attachment_references_does_not_flag_successful_ocr_as_unparsed():
     item = AttachmentFile(
         index="1", rel_dir="SA-4c", filename="screenshot.webp",
@@ -287,6 +426,43 @@ def test_build_attachment_index_includes_docx_embedded_images(tmp_path):
     virtual = [it for it in idx["items"] if "embedded_media" in it.rel_path]
     assert virtual, "expected virtual attachment from embedded image"
     assert any(v.file_type == "png" for v in virtual)
+
+
+def test_build_attachment_index_keeps_same_named_source_docs_separate(tmp_path):
+    """Nested DOCX files with the same basename must not share OCR bytes."""
+    import io
+    import zipfile
+
+    root = tmp_path / "attachments"
+    first = root / "SA-1" / "password-policy.docx"
+    second = root / "SA-2" / "password-policy.docx"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+
+    def make_docx(image_bytes):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as docx:
+            docx.writestr("word/document.xml", b"<?xml version='1.0'?><doc/>")
+            docx.writestr("word/media/image1.png", image_bytes)
+        return archive.getvalue()
+
+    first.write_bytes(make_docx(b"first-image"))
+    second.write_bytes(make_docx(b"second-image"))
+
+    index = build_attachment_index(str(root))
+    expected = {
+        ".embedded_media/SA-1/password-policy.docx::image1.png": b"first-image",
+        ".embedded_media/SA-2/password-policy.docx::image1.png": b"second-image",
+    }
+    source_map = index["source_rel_path_by_logical_path"]
+
+    assert {
+        item.rel_path for item in index["items"] if item.rel_path.startswith(".embedded_media/")
+    } == set(expected)
+    assert len(set(source_map.values())) == len(source_map)
+    for logical_path, expected_bytes in expected.items():
+        physical_path = root / source_map[logical_path.lower()]
+        assert physical_path.read_bytes() == expected_bytes
 
 
 def test_extract_attachment_text_handles_legacy_via_converter(tmp_path, monkeypatch):

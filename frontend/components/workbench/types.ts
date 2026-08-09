@@ -55,6 +55,7 @@ export type WorkbenchViewModel = {
   reviewId?: string;
   status: WorkbenchStatus;
   evidenceItems: EvidenceItem[];
+  evidenceAnalysis?: EvidenceAnalysis;
   summaryMetrics: SummaryMetric[];
   analysisSections: AnalysisSection[];
   progressSteps: ProgressStep[];
@@ -71,6 +72,74 @@ export type EvidenceRef = {
   cell_or_range?: string;
   attachment?: string;
   excerpt?: string;
+};
+
+export type OcrStats = {
+  calls: number;
+  success: number;
+  errors: number;
+  timeouts: number;
+};
+
+export type EvidenceAnalysisEvidence = {
+  path: string;
+  fileType?: string;
+  extractionStatus?: string;
+  excerpt: string;
+  supports?: string;
+  confidence?: string;
+};
+
+export type EvidenceAnalysisUnresolved = {
+  request: string;
+  reason: string;
+};
+
+export type EvidenceAnalysisDetail = {
+  sheet: string;
+  status: string;
+  toolCalls: number;
+  ocr: OcrStats;
+  evidence: EvidenceAnalysisEvidence[];
+  unresolved: EvidenceAnalysisUnresolved[];
+};
+
+/** UI-safe, normalized form of the evidence-agent diagnostics. */
+export type EvidenceAnalysis = {
+  mode?: string;
+  runs: number;
+  toolCalls: number;
+  acceptedEvidence: number;
+  unresolved: number;
+  errors: number;
+  ocr: OcrStats;
+  details: EvidenceAnalysisDetail[];
+};
+
+/** Raw shape emitted by the review API (kept in snake_case for compatibility). */
+export type EvidenceAgentStatsPayload = {
+  mode?: string;
+  runs?: number;
+  tool_calls?: number;
+  accepted_evidence?: number;
+  unresolved?: number;
+  errors?: number;
+  ocr?: Partial<OcrStats>;
+  details?: Array<{
+    sheet?: string;
+    status?: string;
+    tool_calls?: number;
+    ocr?: Partial<OcrStats>;
+    evidence?: Array<{
+      path?: string;
+      file_type?: string;
+      extraction_status?: string;
+      excerpt?: string;
+      supports?: string;
+      confidence?: string;
+    }>;
+    unresolved?: Array<{ request?: string; reason?: string }>;
+  }>;
 };
 
 export type Finding = {
@@ -115,6 +184,7 @@ export type FindingsPayload = {
     by_status?: Record<string, number>;
     by_risk_type?: Record<string, number>;
     llm_call_stats?: Record<string, Record<string, number>>;
+    evidence_agent?: EvidenceAgentStatsPayload;
   };
   findings: Finding[];
 };

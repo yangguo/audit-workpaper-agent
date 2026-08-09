@@ -301,7 +301,15 @@ def build_evidence_tools(
             )
         try:
             root = Path(root_raw).expanduser().resolve()
-            source = (root / Path(item_path)).resolve()
+            source_map = attachments.get("source_rel_path_by_logical_path") or {}
+            source_rel_path = (
+                source_map.get(key, item_path)
+                if isinstance(source_map, dict)
+                else item_path
+            )
+            if not _clean_rel_path(str(source_rel_path)):
+                raise ValueError("indexed_file_not_found")
+            source = (root / Path(str(source_rel_path))).resolve()
             if not source.is_file() or not source.is_relative_to(root):
                 raise ValueError("indexed_file_not_found")
         except (OSError, ValueError):

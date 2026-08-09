@@ -180,6 +180,65 @@ describe("buildWorkbenchViewModel", () => {
     );
   });
 
+  it("exposes validated evidence-agent OCR analysis for the workbench", () => {
+    const model = buildWorkbenchViewModel({
+      status: "completed",
+      archiveUrl: "",
+      contentBlocks: [],
+      messages: [],
+      isLoading: false,
+      elapsedSeconds: 12,
+      error: null,
+      findings: {
+        review_id: "rid-evidence",
+        stats: {
+          total_findings: 0,
+          by_severity: {},
+          evidence_agent: {
+            mode: "always",
+            runs: 1,
+            tool_calls: 3,
+            accepted_evidence: 1,
+            unresolved: 1,
+            errors: 0,
+            ocr: { calls: 1, success: 1, errors: 0, timeouts: 0 },
+            details: [
+              {
+                sheet: "SA-1",
+                status: "completed",
+                tool_calls: 3,
+                ocr: { calls: 1, success: 1, errors: 0, timeouts: 0 },
+                evidence: [
+                  {
+                    path: ".embedded_media/password-policy.docx::image1.png",
+                    file_type: "png",
+                    extraction_status: "ocr",
+                    excerpt: "Password age must not exceed 90 days.",
+                    supports: "supports password-policy control",
+                    confidence: "high",
+                  },
+                ],
+                unresolved: [{ request: "管理员截图", reason: "未提供截图" }],
+              },
+            ],
+          },
+        },
+        findings: [],
+      },
+    });
+
+    expect(model.evidenceAnalysis?.runs).toBe(1);
+    expect(model.evidenceAnalysis?.ocr.success).toBe(1);
+    expect(model.evidenceAnalysis?.details[0]?.evidence[0]).toMatchObject({
+      path: ".embedded_media/password-policy.docx::image1.png",
+      excerpt: "Password age must not exceed 90 days.",
+      extractionStatus: "ocr",
+    });
+    expect(model.evidenceAnalysis?.details[0]?.unresolved[0]?.reason).toBe(
+      "未提供截图",
+    );
+  });
+
   it("passes the understood requirement through to the view model", () => {
     const understood = {
       review_id: "rid1",

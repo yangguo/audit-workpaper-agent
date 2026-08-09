@@ -1,5 +1,8 @@
 import type {
   AnalysisSection,
+  EvidenceAgentStatsPayload,
+  EvidenceAnalysis,
+  EvidenceAnalysisDetail,
   EvidenceItem,
   Finding,
   FindingsPayload,
@@ -137,6 +140,99 @@ function findingsToEvidence(findings: Finding[]): EvidenceItem[] {
   return items;
 }
 
+function nonNegativeInt(value: unknown): number {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : 0;
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+}
+
+function boundedText(value: unknown, limit = 1200): string {
+  return typeof value === "string" ? value.trim().slice(0, limit) : "";
+}
+
+function safeEvidencePath(value: unknown): string {
+  const path = boundedText(value, 500).replaceAll("\\", "/");
+  if (
+    !path ||
+    path.startsWith("/") ||
+    /^[A-Za-z]:($|\/)/.test(path) ||
+    path.split("/").some((part) => part === "..")
+  ) {
+    return "";
+  }
+  return path;
+}
+
+function normalizeOcrStats(value: unknown) {
+  const stats = value && typeof value === "object" ? value : {};
+  return {
+    calls: nonNegativeInt((stats as Record<string, unknown>).calls),
+    success: nonNegativeInt((stats as Record<string, unknown>).success),
+    errors: nonNegativeInt((stats as Record<string, unknown>).errors),
+    timeouts: nonNegativeInt((stats as Record<string, unknown>).timeouts),
+  };
+}
+
+function evidenceAnalysisFromStats(
+  value: EvidenceAgentStatsPayload | undefined,
+): EvidenceAnalysis | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const details: EvidenceAnalysisDetail[] = (
+    Array.isArray(value.details) ? value.details : []
+  )
+    .slice(0, 20)
+    .map((detail) => {
+      const evidence = (Array.isArray(detail?.evidence) ? detail.evidence : [])
+        .slice(0, 12)
+        .map((item) => {
+          const path = safeEvidencePath(item?.path);
+          const excerpt = boundedText(item?.excerpt);
+          if (!path || !excerpt) return null;
+          return {
+            path,
+            fileType: boundedText(item?.file_type, 80) || undefined,
+            extractionStatus:
+              boundedText(item?.extraction_status, 80) || undefined,
+            excerpt,
+            supports: boundedText(item?.supports, 300) || undefined,
+            confidence: boundedText(item?.confidence, 80) || undefined,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null);
+      const unresolved = (
+        Array.isArray(detail?.unresolved) ? detail.unresolved : []
+      )
+        .slice(0, 12)
+        .map((item) => ({
+          request: boundedText(item?.request, 300),
+          reason: boundedText(item?.reason, 500),
+        }))
+        .filter((item) => item.request || item.reason);
+      return {
+        sheet: boundedText(detail?.sheet, 160) || "未命名工作表",
+        status: boundedText(detail?.status, 80) || "unknown",
+        toolCalls: nonNegativeInt(detail?.tool_calls),
+        ocr: normalizeOcrStats(detail?.ocr),
+        evidence,
+        unresolved,
+      };
+    });
+  return {
+    mode: boundedText(value.mode, 80) || undefined,
+    runs: nonNegativeInt(value.runs),
+    toolCalls: nonNegativeInt(value.tool_calls),
+    acceptedEvidence: nonNegativeInt(value.accepted_evidence),
+    unresolved: nonNegativeInt(value.unresolved),
+    errors: nonNegativeInt(value.errors),
+    ocr: normalizeOcrStats(value.ocr),
+    details,
+  };
+}
+
 export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
   const uploaded = uploadedEvidence(input);
   const reviewId = input.findings?.review_id;
@@ -212,6 +308,9 @@ export function buildWorkbenchViewModel(input: Input): WorkbenchViewModel {
       status,
       evidenceItems: uploaded.concat(
         findingsToEvidence(input.findings.findings),
+      ),
+      evidenceAnalysis: evidenceAnalysisFromStats(
+        input.findings.stats.evidence_agent,
       ),
       summaryMetrics,
       analysisSections,

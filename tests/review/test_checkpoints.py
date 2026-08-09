@@ -10,6 +10,7 @@ from review.checkpoints import (
     _extract_checkpoint_keywords,
     _llm_check_sheet_by_checkpoints,
 )
+from review.models import AttachmentFile
 
 
 class _FakeRunnable:
@@ -108,6 +109,62 @@ async def test_llm_check_sheet_by_checkpoints_returns_findings(monkeypatch):
     assert findings[0].issue_type == "LLM判定：检查要点存在问题（证据不足）"
     assert findings[0].status == "fail"
     assert findings[0].severity == "P1"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_finding_keeps_verified_attachment_citation_in_its_basis(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "表头"
+    ws["A2"] = "执行了密码策略检查。"
+    attachment_path = "SA-1/password-policy.png"
+    item = AttachmentFile(
+        index="1", rel_dir="SA-1", filename="password-policy.png",
+        rel_path=attachment_path, file_type="png", status="binary",
+        extraction_status="binary", extracted_text="", size=19,
+    )
+    attachments = {
+        "items": [item],
+        "by_filename": {"password-policy.png": [item]},
+        "by_rel_path": {attachment_path.lower(): [item]},
+        "by_index": {"1": [item]},
+        "by_sheet_norm": {},
+        "ocr_by_path": {
+            attachment_path.lower(): {
+                "status": "ok",
+                "content": "密码最小长度为 12 个字符",
+            },
+        },
+    }
+    payload = json.dumps({
+        "results": [{
+            "id": 1,
+            "checkpoint": "检查密码最小长度",
+            "status": "fail",
+            "conclusion": "密码长度未满足要求。",
+            "reasons": ["截图中的参数低于要求"],
+            "evidence_refs": [{
+                "attachment": attachment_path,
+                "excerpt": "密码最小长度为 12 个字符",
+            }],
+            "severity": "P1",
+            "risk_type": "证据不足",
+            "fix_suggestion": {"supplement_explanation": "调整密码策略"},
+        }]
+    }, ensure_ascii=False)
+
+    findings = await _llm_check_sheet_by_checkpoints(
+        llm=_FakeLLM(payload), ws_title="SA-1", ws=ws,
+        checkpoints=["检查密码最小长度"], attachments=attachments,
+        batch_size=6, sleep_seconds=0,
+    )
+
+    assert findings[0].status == "fail"
+    refs = json.loads(findings[0].evidence_refs)
+    assert refs[0]["attachment"] == attachment_path
+    assert refs[0]["excerpt"] == "密码最小长度为 12 个字符"
+    assert f"附件：{attachment_path}" in findings[0].basis
 
 
 @pytest.mark.asyncio

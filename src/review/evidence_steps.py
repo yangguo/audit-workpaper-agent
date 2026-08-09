@@ -12,6 +12,7 @@ from review.attachments import (
     _match_attachment_items,
     _verify_attachment_evidence_refs,
     build_evidence_inventory,
+    format_evidence_refs_for_basis,
 )
 from review.constants import EVIDENCE_KEYWORDS
 from review.excel_utils import _detect_layout, _get_cell_value, _normalize_sheet_id, _truncate
@@ -277,7 +278,7 @@ async def _llm_check_evidence_vs_steps(
                         ev_sheet = str(ref.get("sheet", "")).strip() or ws_title
                         ev_attachment = str(ref.get("attachment", "")).strip()
                         ev_excerpt = str(ref.get("excerpt", "")).strip()
-                        if ev_cell or ev_excerpt:
+                        if ev_cell or ev_attachment:
                             evidence_refs_list.append({
                                 "sheet": ev_sheet,
                                 "cell_or_range": ev_cell,
@@ -319,10 +320,7 @@ async def _llm_check_evidence_vs_steps(
                 if missing_text:
                     basis_parts.append(missing_text)
                 if evidence_refs_list:
-                    refs_text = "; ".join(
-                        f"{r.get('cell_or_range', '')}: {r.get('excerpt', '')[:200]}"
-                        for r in evidence_refs_list[:3] if r.get('excerpt')
-                    )
+                    refs_text = format_evidence_refs_for_basis(evidence_refs_list)
                     if refs_text:
                         basis_parts.append("引用: " + refs_text)
                 if unknown_reason:

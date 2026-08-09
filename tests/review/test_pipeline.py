@@ -6,20 +6,55 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from review.pipeline import run_review, _parse_sheet_filter, _finding_to_dict, _backfill_embedded_evidence_refs
-from review.models import Finding
+from review.models import AttachmentFile, Finding
 
 
-def test_backfill_embedded_evidence_refs_adds_missing_paths():
+def test_backfill_embedded_evidence_ref_uses_validated_agent_excerpt():
+    logical_path = ".embedded_media/sap密码策略.docx::image1.png"
+    item = AttachmentFile(
+        index="",
+        rel_dir=".embedded_media",
+        filename="sap密码策略.docx::image1.png",
+        rel_path=logical_path,
+        file_type="png",
+        status="binary",
+        extraction_status="binary",
+        extracted_text="",
+    )
+    attachments = {
+        "items": [item],
+        "by_filename": {item.filename.lower(): [item]},
+        "by_rel_path": {logical_path.lower(): [item]},
+        "by_index": {},
+        "by_sheet_norm": {},
+        "ocr_by_path": {
+            logical_path.lower(): {
+                "status": "ok",
+                "content": "密码最小长度为 12 个字符",
+            },
+        },
+        "agent_evidence_by_sheet": {
+            "SA10": [{
+                "path": logical_path,
+                "file_type": "png",
+                "extraction_status": "ocr",
+                "excerpt": "密码最小长度为 12 个字符",
+                "supports": "密码策略参数",
+            }],
+        },
+    }
     finding = {
         "sheet": "SA-10",
-        "basis": "底稿引用了《SAP系统密码策略》<C22.SA-10-1>。截图 .embedded_media/sap密码策略.docx::image1.png 显示密码长度5。",
-        "evidence_refs": [
-            {"sheet": "SA-10", "cell_or_range": "C14", "attachment": "", "excerpt": "通过检查《SAP系统密码策略》"}
-        ],
+        "basis": f"截图 {logical_path} 显示密码最小长度为 12 个字符。",
+        "evidence_refs": [],
     }
-    out = _backfill_embedded_evidence_refs([finding])
-    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
-    assert ".embedded_media/sap密码策略.docx::image1.png" in atts
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    assert out[0]["evidence_refs"] == [{
+        "sheet": "SA-10",
+        "cell_or_range": "",
+        "attachment": logical_path,
+        "excerpt": "密码最小长度为 12 个字符",
+    }]
 
 
 def test_backfill_embedded_evidence_refs_no_duplicate():
@@ -34,19 +69,18 @@ def test_backfill_embedded_evidence_refs_no_duplicate():
     assert len(out[0]["evidence_refs"]) == 1
 
 
-def test_backfill_embedded_evidence_refs_handles_real_attachments():
+def test_backfill_does_not_add_an_uncited_real_attachment():
     finding = {
         "sheet": "PE-6",
         "basis": "见 审计证据/PE-6/C10-演练记录.pdf（含截图）。",
         "evidence_refs": [],
     }
     out = _backfill_embedded_evidence_refs([finding])
-    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
-    assert "审计证据/PE-6/C10-演练记录.pdf" in atts
+    assert out[0]["evidence_refs"] == []
 
 
-def test_backfill_embedded_evidence_refs_resolves_doc_name_to_embedded():
-    """`《doc_name》` references in basis should resolve to .embedded_media/<doc>::*.png paths."""
+def test_backfill_does_not_turn_a_document_name_into_all_embedded_images():
+    """A document mention alone is not a verified citation to each image."""
     attachments = {
         "items": [
             {
@@ -67,9 +101,7 @@ def test_backfill_embedded_evidence_refs_resolves_doc_name_to_embedded():
         "evidence_refs": [],
     }
     out = _backfill_embedded_evidence_refs([finding], attachments)
-    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
-    assert ".embedded_media/doca.docx::image1.png" in atts
-    assert ".embedded_media/doca.docx::image2.png" in atts
+    assert out[0]["evidence_refs"] == []
 
 
 def test_backfill_embedded_evidence_refs_no_match_leaves_attachment_empty():
@@ -365,6 +397,22 @@ async def test_run_review_uses_constrained_evidence_agent_and_records_stats(monk
     assert stats["evidence_agent"]["runs"] == 1
     assert stats["evidence_agent"]["accepted_evidence"] == 1
     assert stats["evidence_agent"]["tool_calls"] == 1
+    assert stats["evidence_agent"]["details"] == [{
+        "sheet": "SA-4c",
+        "status": "completed",
+        "tool_calls": 1,
+        "evidence": [{
+            "path": "SA-4c/users.txt",
+            "file_type": "txt",
+            "extraction_status": "ok",
+            "excerpt": "admin,administrator",
+            "supports": "用户清单中的管理员权限",
+            "confidence": "high",
+        }],
+        "unresolved": [],
+        "tool_trace": [{"tool": "search_attachment_text"}],
+        "ocr": {},
+    }]
 
 
 @pytest.mark.asyncio

@@ -95,6 +95,44 @@ async def test_llm_check_evidence_vs_steps_returns_findings(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_evidence_step_basis_labels_the_attachment_that_it_quotes(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    ws = _build_ws_with_evidence_ref()
+    attachments = _preview_with_item()
+    attachments["ocr_by_path"] = {
+        "d/a.png": {
+            "status": "ok",
+            "content": "截图显示管理员权限已分配",
+        },
+    }
+    payload = json.dumps({
+        "results": [{
+            "id": 1,
+            "status": "fail",
+            "conclusion": "证据与审计步骤不匹配。",
+            "reasons": ["截图未说明抽样范围"],
+            "evidence_refs": [{
+                "attachment": "d/a.png",
+                "excerpt": "截图显示管理员权限已分配",
+            }],
+            "severity": "P1",
+            "risk_type": "证据不足",
+            "fix_suggestion": {"supplement_explanation": "补充抽样范围"},
+        }]
+    }, ensure_ascii=False)
+
+    findings = await _llm_check_evidence_vs_steps(
+        llm=_FakeLLM(payload), ws_title="SA-1", ws=ws,
+        attachments=attachments, batch_size=6, sleep_seconds=0,
+    )
+
+    finding = next(f for f in findings if f.status == "fail")
+    assert "附件：d/a.png" in finding.basis
+    refs = json.loads(finding.evidence_refs)
+    assert refs[0]["attachment"] == "d/a.png"
+
+
+@pytest.mark.asyncio
 async def test_llm_check_evidence_vs_steps_empty_preview_returns_empty(monkeypatch):
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
     ws = _build_ws_with_evidence_ref()
@@ -177,6 +215,5 @@ def test_evidence_steps_prompt_includes_evidence_inventory(monkeypatch):
     # Inventory markers must appear in the user prompt (which carries the payload).
     user_msg = next(m for m in captured["messages"] if m["role"] == "user")
     assert "证据清单" in user_msg["content"] or "证据不足" in user_msg["content"]
-
 
 

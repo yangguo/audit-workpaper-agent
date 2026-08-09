@@ -246,6 +246,7 @@ export function Thread() {
         summaryMetrics={model.summaryMetrics}
         analysisSections={model.analysisSections}
         evidenceItems={model.evidenceItems}
+        evidenceAnalysis={model.evidenceAnalysis}
         progressSteps={model.progressSteps}
         toolTraces={model.toolTraces}
         liveProgress={model.liveProgress}
