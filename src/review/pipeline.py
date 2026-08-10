@@ -95,18 +95,16 @@ _EMBEDDED_RE = re.compile(r"\.embedded_media/[^\s\)\]\}\,\"。，;]+")
 _REAL_ATTACH_RE = re.compile(r"(?<![/.])(审计证据/[^\s\)\]\}\,\"。，;]+\.[A-Za-z0-9]+)")
 # Common audit verb phrases that appear right before `《doc》` references.
 # When matched, the doc reference is more likely to mean an evidence document.
-_DOC_REF_HINT_RE = re.compile(
-    r"(引用了?|获取了?|提供了?|未提供|覆盖|查看|查阅|审阅|核验|附|附件|参考|摘自|见|见附|对照|依据|根据)"
-    r"\s*[「『‘“《]([^「」『『》»”]+?)[」》』”»」』]"
-)
+_DOC_REF_HINT_RE = re.compile(r"《([^》]+?)》")
 
 
 def _build_doc_to_media_map(attachments):
     """Map a document-name stem to its embedded-media paths.
 
-    The V1 LLM often writes `《SAP系统密码策略》` while the attachment index
-    stores `sap系统数据库密码策略.docx`. A simple substring match in either
-    direction lets us resolve `《...》` references to `.embedded_media/...` paths.
+    The V1 LLM often writes generic titles like `《SAP系统密码策略》` while the
+    attachment index stores concrete files such as `sap应用系统密码策略.docx`.
+    Resolution first tries exact/substring matches, then falls back to token
+    overlap so generic titles can still be linked to their screenshots.
     Keys are lowercased for case-insensitive matching.
     """
     if not attachments:
@@ -126,7 +124,34 @@ def _build_doc_to_media_map(attachments):
     return by_stem
 
 
+_TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
+
+
+def _token_set(text: str):
+    """Case-folded token set for fuzzy doc-name matching.
+
+    Alphanumeric runs (2+) are kept as words; CJK text is represented as
+    character bigrams so that partial overlaps like `系统密码策略` work
+    without requiring a full segmenter.
+    """
+    text = str(text or "").lower()
+    tokens = set(_TOKEN_RE.findall(text))
+    chars = list(text)
+    for i in range(len(chars) - 1):
+        a, b = chars[i], chars[i + 1]
+        if "一" <= a <= "鿿" or "一" <= b <= "鿿":
+            tokens.add(a + b)
+    return tokens
+
+
 def _resolve_doc_name_to_media(doc_name, doc_to_media):
+    """Resolve a referenced document name to embedded-media paths.
+
+    Resolution order:
+    1. Exact lowercased match.
+    2. Bidirectional substring match.
+    3. Token-overlap fallback (score >= 0.5, top 3 stems).
+    """
     if not doc_name or not doc_to_media:
         return []
     norm = doc_name.lower()
@@ -135,47 +160,86 @@ def _resolve_doc_name_to_media(doc_name, doc_to_media):
     for stem, paths in doc_to_media.items():
         if norm in stem or stem in norm:
             return list(paths)
-    return []
+
+    doc_tokens = _token_set(doc_name)
+    if not doc_tokens:
+        return []
+
+    scored = []
+    for stem, paths in doc_to_media.items():
+        stem_tokens = _token_set(stem)
+        if not stem_tokens:
+            continue
+        score = len(doc_tokens & stem_tokens) / max(len(doc_tokens), len(stem_tokens))
+        if score >= 0.5:
+            scored.append((score, paths))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    seen = set()
+    result = []
+    for _score, paths in scored[:3]:
+        for p in paths:
+            if p not in seen:
+                seen.add(p)
+                result.append(p)
+    return result
 
 
 def _backfill_embedded_evidence_refs(findings_dicts, attachments=None):
     """Lift attachment paths into `evidence_refs[].attachment`.
 
-    Three passes, in order:
-    1. Direct paths in `basis` (`.embedded_media/...`, `审计证据/...`).
-    2. Document-name references in `basis` (e.g. `《SAP系统密码策略》`) resolved
-       against the attachment index's embedded-media entries.
-    3. (No-op) — placeholder for future heuristics.
+    Searches across `basis`, `snippet`, and any excerpts recorded in
+    `llm_evidence_refs`. Direct paths (`.embedded_media/...`, `审计证据/...`)
+    are lifted as-is; `《...》` document references are resolved to embedded
+    media via token overlap.
 
-    Cheap post-process; doesn't change the LLM's findings text, only
-    fills the structural `evidence_refs[].attachment` field so the UI can
-    render what was actually inspected.
+    Cheap post-process; doesn't change the LLM's findings text, only fills
+    the structural `evidence_refs[].attachment` field so the UI can render
+    what was actually inspected.
     """
     if not findings_dicts:
         return findings_dicts
     doc_to_media = _build_doc_to_media_map(attachments)
+
+    def _text_sources(fnd):
+        for key in ("basis", "snippet"):
+            v = fnd.get(key) or ""
+            if v:
+                yield str(v)
+        llm_refs = fnd.get("llm_evidence_refs")
+        if isinstance(llm_refs, str) and llm_refs.strip():
+            try:
+                llm_refs = json.loads(llm_refs)
+            except Exception:
+                llm_refs = None
+        if isinstance(llm_refs, list):
+            for lr in llm_refs:
+                if isinstance(lr, dict):
+                    for key in ("excerpt", "attachment"):
+                        v = lr.get(key) or ""
+                        if v:
+                            yield str(v)
+
     for fnd in findings_dicts:
-        basis = fnd.get("basis") or ""
-        if not basis:
-            continue
         refs = fnd.get("evidence_refs") or []
         existing = {str(r.get("attachment") or "") for r in refs}
         new_paths = []
-        for m in _EMBEDDED_RE.findall(basis):
-            p = m.rstrip(".,;，。，")
-            if p and p not in existing and p not in new_paths:
-                new_paths.append(p)
-        for m in _REAL_ATTACH_RE.findall(basis):
-            p = m.rstrip(".,;，。，")
-            if p and p not in existing and p not in new_paths:
-                new_paths.append(p)
-        for m in _DOC_REF_HINT_RE.finditer(basis):
-            doc_name = m.group(2).strip()
-            if not doc_name or len(doc_name) < 2:
-                continue
-            for p in _resolve_doc_name_to_media(doc_name, doc_to_media):
-                if p not in existing and p not in new_paths:
+        for text in _text_sources(fnd):
+            for m in _EMBEDDED_RE.findall(text):
+                p = m.rstrip(".,;，。，")
+                if p and p not in existing and p not in new_paths:
                     new_paths.append(p)
+            for m in _REAL_ATTACH_RE.findall(text):
+                p = m.rstrip(".,;，。，")
+                if p and p not in existing and p not in new_paths:
+                    new_paths.append(p)
+            for m in _DOC_REF_HINT_RE.finditer(text):
+                doc_name = m.group(1).strip()
+                if not doc_name or len(doc_name) < 2:
+                    continue
+                for p in _resolve_doc_name_to_media(doc_name, doc_to_media):
+                    if p not in existing and p not in new_paths:
+                        new_paths.append(p)
         for p in new_paths:
             refs.append({
                 "sheet": fnd.get("sheet"),

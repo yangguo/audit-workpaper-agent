@@ -200,6 +200,37 @@ def test_ocr_tool_rejects_unindexed_path_and_preserves_remote_failure(tmp_path):
     assert failed["reason"] == "mineru_failed"
 
 
+def test_ocr_tool_resolves_embedded_media_virtual_path(tmp_path):
+    """Embedded media rel_path uses :: but the file on disk uses __ (Windows-safe)."""
+    embedded_item = _make_embedded_item(".embedded_media/policy.docx::image1.png")
+    index = _index(embedded_item)
+    index["path"] = str(tmp_path)
+    embedded_root = tmp_path / ".embedded_media"
+    embedded_root.mkdir()
+    (embedded_root / "policy.docx__image1.png").write_bytes(b"screenshot")
+
+    captured_paths = []
+
+    class _FakeMinerU:
+        def parse_file(self, path, **kwargs):
+            captured_paths.append(path)
+            return MinerUResult(
+                status="ok",
+                text="密码长度：8",
+                provider="mineru-lightweight",
+                task_id="task-ocr",
+            )
+
+    tools = {tool.name: tool for tool in build_evidence_tools(index, mineru_client=_FakeMinerU())}
+    result = json.loads(tools["ocr_attachment"].invoke({"path": ".embedded_media/policy.docx::image1.png"}))
+
+    assert result["status"] == "ok"
+    assert result["path"] == ".embedded_media/policy.docx::image1.png"
+    assert captured_paths
+    assert captured_paths[0].name == "policy.docx__image1.png"
+    assert captured_paths[0].is_relative_to(tmp_path)
+
+
 def test_fallback_trigger_requires_directory_and_evidence_gap(monkeypatch):
     wb = openpyxl.Workbook()
     ws = wb.active

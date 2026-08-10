@@ -117,6 +117,27 @@ def _path_matches(attachments: Dict[str, object], path: str) -> List[Any]:
     return []
 
 
+def _resolve_disk_source(root: Path, item_path: str) -> Path:
+    """Return the actual on-disk Path for an indexed attachment path.
+
+    Embedded media are stored with a ``__`` separator on disk while their
+    indexed ``rel_path`` uses ``::``; this helper tries both forms and
+    validates the result stays inside ``root``.
+    """
+    root_resolved = root.expanduser().resolve()
+    candidates = [item_path]
+    if ".embedded_media/" in item_path and "::" in item_path:
+        candidates.append(item_path.replace("::", "__"))
+    for raw in candidates:
+        try:
+            source = (root_resolved / Path(raw)).resolve()
+            if source.is_file() and source.is_relative_to(root_resolved):
+                return source
+        except (OSError, ValueError):
+            continue
+    raise ValueError("indexed_file_not_found")
+
+
 def build_evidence_tools(
     attachments: Dict[str, object],
     *,
@@ -300,10 +321,7 @@ def build_evidence_tools(
                 {"status": "error", "reason": "attachment_root_missing"},
             )
         try:
-            root = Path(root_raw).expanduser().resolve()
-            source = (root / Path(item_path)).resolve()
-            if not source.is_file() or not source.is_relative_to(root):
-                raise ValueError("indexed_file_not_found")
+            source = _resolve_disk_source(Path(root_raw), item_path)
         except (OSError, ValueError):
             return _record(
                 "ocr_attachment",

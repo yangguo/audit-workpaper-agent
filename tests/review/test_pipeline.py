@@ -72,6 +72,23 @@ def test_backfill_embedded_evidence_refs_resolves_doc_name_to_embedded():
     assert ".embedded_media/doca.docx::image2.png" in atts
 
 
+def test_backfill_embedded_evidence_refs_catches_check_verb():
+    """References like `通过检查《doca》` must resolve regardless of preceding verb."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/doca.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "通过检查《doca》，我们获取了系统密码策略。",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
+    assert ".embedded_media/doca.docx::image1.png" in atts
+
+
 def test_backfill_embedded_evidence_refs_no_match_leaves_attachment_empty():
     """Document name that doesn't match any attachment should not add refs."""
     attachments = {
@@ -86,6 +103,70 @@ def test_backfill_embedded_evidence_refs_no_match_leaves_attachment_empty():
     }
     out = _backfill_embedded_evidence_refs([finding], attachments)
     assert out[0]["evidence_refs"] == []
+
+
+def test_backfill_resolves_generic_title_via_token_overlap():
+    """Generic titles like `《SAP系统密码策略》` should resolve to related embedded media."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+            {"rel_path": ".embedded_media/sap系统数据库密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+            {"rel_path": ".embedded_media/操作系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "通过检查《SAP系统密码策略》，我们获取了系统密码策略。",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
+    assert ".embedded_media/sap应用系统密码策略.docx::image1.png" in atts
+    assert ".embedded_media/sap系统数据库密码策略.docx::image1.png" in atts
+    assert ".embedded_media/操作系统密码策略.docx::image1.png" in atts
+
+
+def test_backfill_uses_snippet_when_basis_has_no_reference():
+    """Rule-based findings often put the execution text in `snippet`; backfill should still resolve it."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "cell": "C14",
+        "basis": "标准审计程序要求获取/检查证据，但执行描述未体现对应证据。",
+        "snippet": "1.在系统管理员协助下，通过检查《SAP系统密码策略》<C22.SA-10-1>，我们获取了系统密码策略：...",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
+    assert ".embedded_media/sap应用系统密码策略.docx::image1.png" in atts
+
+
+def test_backfill_uses_llm_evidence_refs_excerpt():
+    """If V1 re-review stored an excerpt in llm_evidence_refs, backfill should resolve it too."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "标准审计程序要求获取/检查证据，但执行描述未体现对应证据。",
+        "snippet": "",
+        "llm_evidence_refs": json.dumps([{
+            "sheet": "SA-10",
+            "cell_or_range": "C14",
+            "attachment": "",
+            "excerpt": "通过检查《SAP系统密码策略》获取系统密码策略",
+        }], ensure_ascii=False),
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    atts = [r["attachment"] for r in out[0]["evidence_refs"]]
+    assert ".embedded_media/sap应用系统密码策略.docx::image1.png" in atts
 
 
 class _FakeRunnable:
