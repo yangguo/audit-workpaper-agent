@@ -67,6 +67,11 @@ def test_export_findings_returns_xlsx(client, monkeypatch, tmp_path):
     # Should be a valid xlsx
     wb = openpyxl.load_workbook(io.BytesIO(res.content))
     assert wb.active.title == "审阅发现汇总"
+    summary_values = [
+        wb["审阅运行摘要"].cell(row=row, column=2).value
+        for row in range(2, wb["审阅运行摘要"].max_row + 1)
+    ]
+    assert "r123" in summary_values
 
 
 def test_export_findings_missing_returns_404(client, monkeypatch, tmp_path):
@@ -138,3 +143,128 @@ def test_export_findings_empty_list_returns_404(client, monkeypatch, tmp_path):
 
     res = client.get("/findings/r-empty/export?format=xlsx")
     assert res.status_code == 404
+
+
+def test_generate_findings_xlsx_adds_quality_and_provenance_sheets_compatibly():
+    findings = [{
+        "issue_type": "覆盖性",
+        "severity": "P1",
+        "severity_display": "中",
+        "sheet": "SA-1",
+        "cell": None,
+        "risk_type": "覆盖性",
+        "status": "fail",
+        "conclusion": "结论",
+        "basis": "依据",
+        "suggestion": "补充完整范围清单",
+        "evidence_refs": [
+            {"sheet": "SA-1", "cell_or_range": "C5", "excerpt": "不应出现在已验证表"},
+            {"attachment": "foreign.txt", "excerpt": "拒绝引用"},
+        ],
+        "quality": {
+            "schema_version": "review-quality/1",
+            "finding_id": "legacy:f1",
+            "primary_location": {
+                "source_kind": "cell",
+                "sheet": "SA-1",
+                "cell_or_range": "C5",
+                "evidence_id": "cell:1",
+            },
+            "citation_validation": {
+                "status": "partial",
+                "verified_count": 1,
+                "rejected_count": 1,
+                "rejection_codes": ["out_of_scope_source"],
+                "evidence_ids": ["cell:1"],
+                "verified_refs": [{
+                    "evidence_id": "cell:1",
+                    "source_kind": "cell",
+                    "sheet": "SA-1",
+                    "cell_or_range": "C5",
+                    "excerpt": "已验证摘录",
+                    "source_ref": "workpaper:SA-1!C5",
+                    "source_sha256": "sha-1",
+                    "content_hash": "hash-1",
+                    "start_offset": 0,
+                    "end_offset": 5,
+                }],
+            },
+            "gates": {
+                "deterministic_cross_check": {"status": "passed", "issues": []},
+                "model_re_review": {"status": "not_run", "reason": "same-model"},
+                "adversarial_challenge": {"status": "not_run", "reason": "P0 only"},
+            },
+            "provenance": {
+                "input_sha256": "sha-1",
+                "engine_version": "engine-1",
+                "policy_pack": None,
+            },
+            "grouping": {
+                "root_cause_id": "root:r1",
+                "duplicate_of": None,
+                "related_finding_ids": [],
+            },
+            "remediation": {
+                "status": "actionable",
+                "action": "补充完整范围清单",
+                "required_evidence": ["范围清单"],
+                "acceptance_criteria": ["范围可复核"],
+                "missing_fields": [],
+            },
+        },
+    }]
+
+    data = generate_findings_xlsx(
+        findings,
+        report_metadata={
+            "review_id": "r-quality",
+            "created_at": "2026-08-11T00:00:00",
+            "source": "sample.xlsx",
+            "stats": {
+                "quality": {
+                    "mode": "shadow",
+                    "raw_findings": 1,
+                    "canonical_findings": 1,
+                    "duplicate_findings": 0,
+                    "root_cause_count": 1,
+                }
+            },
+        },
+    )
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+
+    assert wb.sheetnames == [
+        "审阅发现汇总",
+        "审阅运行摘要",
+        "审阅质量摘要",
+        "证据溯源明细",
+    ]
+    legacy_ws = wb["审阅发现汇总"]
+    assert legacy_ws.cell(row=2, column=3).value == "C5"
+
+    quality_ws = wb["审阅质量摘要"]
+    quality_headers = [quality_ws.cell(row=1, column=c).value for c in range(1, 18)]
+    assert "引用校验状态" in quality_headers
+    assert quality_ws.cell(row=2, column=2).value == "legacy:f1"
+    assert "partial" in [quality_ws.cell(row=2, column=c).value for c in range(1, 18)]
+
+    provenance_ws = wb["证据溯源明细"]
+    assert provenance_ws.max_row == 2
+    provenance_values = [provenance_ws.cell(row=2, column=c).value for c in range(1, 15)]
+    assert "cell:1" in provenance_values
+    assert "foreign.txt" not in str(provenance_values)
+
+
+def test_generate_findings_xlsx_handles_legacy_payload_without_quality_envelope():
+    data = generate_findings_xlsx(
+        [{"issue_type": "历史发现", "sheet": "SA-1", "cell": "C5"}],
+        report_metadata={"review_id": "legacy"},
+    )
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+
+    assert wb["审阅质量摘要"].cell(row=2, column=7).value == "not_available"
+    summary_values = [
+        wb["审阅运行摘要"].cell(row=row, column=2).value
+        for row in range(2, wb["审阅运行摘要"].max_row + 1)
+    ]
+    assert any("历史结果" in str(value) for value in summary_values)

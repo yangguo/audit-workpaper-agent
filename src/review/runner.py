@@ -150,6 +150,7 @@ def _attach_result_quality(
         "rejected_refs": rejected_refs,
         "downgraded_findings": downgraded_findings,
         "input_sha256": source_sha256,
+        "engine_version": engine_version,
         "gate_status": gate_counts,
     }
 

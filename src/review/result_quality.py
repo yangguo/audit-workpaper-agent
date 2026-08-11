@@ -34,6 +34,7 @@ class PrimaryLocation(BaseModel):
     source_kind: Literal["cell", "attachment", "unknown"]
     sheet: str = ""
     cell_or_range: str = ""
+    source_ref: str = ""
     evidence_id: str | None = None
 
 
@@ -45,6 +46,7 @@ class CitationValidation(BaseModel):
     rejected_count: int = Field(default=0, ge=0)
     rejection_codes: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
+    verified_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class GateOutcome(BaseModel):
@@ -189,6 +191,7 @@ def derive_primary_location(
             "source_kind": "cell",
             "sheet": sheet,
             "cell_or_range": cell,
+            "source_ref": f"workpaper:{sheet}!{cell}" if sheet else f"workpaper:{cell}",
             "evidence_id": matching_id,
         }
 
@@ -200,6 +203,8 @@ def derive_primary_location(
                 "source_kind": "cell",
                 "sheet": ref_sheet,
                 "cell_or_range": ref_cell,
+                "source_ref": _string(ref.get("source_ref"))
+                or (f"workpaper:{ref_sheet}!{ref_cell}" if ref_sheet else f"workpaper:{ref_cell}"),
                 "evidence_id": _string(ref.get("evidence_id")) or None,
             }
     for ref in refs or []:
@@ -209,6 +214,8 @@ def derive_primary_location(
                 "source_kind": "attachment",
                 "sheet": _string(ref.get("sheet")) or sheet,
                 "cell_or_range": "",
+                "source_ref": _string(ref.get("source_ref"))
+                or attachment,
                 "evidence_id": _string(ref.get("evidence_id")) or None,
             }
     return None
@@ -290,6 +297,7 @@ def build_quality_envelope(
                 {_string(code) for code in (rejection_codes or []) if _string(code)}
             ),
             evidence_ids=evidence_ids,
+            verified_refs=refs,
         ),
         gates={
             str(name): GateOutcome.model_validate(value)

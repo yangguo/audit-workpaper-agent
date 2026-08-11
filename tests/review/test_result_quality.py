@@ -58,20 +58,19 @@ def test_derive_primary_location_prefers_finding_cell_then_verified_refs():
         },
     ]
 
-    assert derive_primary_location(
-        {"sheet": "SA-1", "cell": "C5"}, refs
-    ) == {
-        "source_kind": "cell",
-        "sheet": "SA-1",
-        "cell_or_range": "C5",
-        "evidence_id": None,
-    }
-    assert derive_primary_location({"sheet": "", "cell": None}, refs) == {
-        "source_kind": "cell",
-        "sheet": "SA-1",
-        "cell_or_range": "C8",
-        "evidence_id": "cell:8",
-    }
+    finding_location = derive_primary_location({"sheet": "SA-1", "cell": "C5"}, refs)
+    assert finding_location["source_kind"] == "cell"
+    assert finding_location["sheet"] == "SA-1"
+    assert finding_location["cell_or_range"] == "C5"
+    assert finding_location["source_ref"] == "workpaper:SA-1!C5"
+    assert finding_location["evidence_id"] is None
+
+    ref_location = derive_primary_location({"sheet": "", "cell": None}, refs)
+    assert ref_location["source_kind"] == "cell"
+    assert ref_location["sheet"] == "SA-1"
+    assert ref_location["cell_or_range"] == "C8"
+    assert ref_location["source_ref"] == "workpaper:SA-1!C8"
+    assert ref_location["evidence_id"] == "cell:8"
 
 
 def test_stable_legacy_finding_id_changes_when_provenance_changes():
@@ -149,13 +148,12 @@ def test_build_quality_envelope_is_additive_and_explicit_about_gate_states():
     assert quality["schema_version"] == "review-quality/1"
     assert quality["finding_id"].startswith("legacy:")
     assert quality["primary_location"]["cell_or_range"] == "C5"
-    assert quality["citation_validation"] == {
-        "status": "verified",
-        "verified_count": 1,
-        "rejected_count": 0,
-        "rejection_codes": [],
-        "evidence_ids": ["cell:1"],
-    }
+    assert quality["citation_validation"]["status"] == "verified"
+    assert quality["citation_validation"]["verified_count"] == 1
+    assert quality["citation_validation"]["rejected_count"] == 0
+    assert quality["citation_validation"]["rejection_codes"] == []
+    assert quality["citation_validation"]["evidence_ids"] == ["cell:1"]
+    assert quality["citation_validation"]["verified_refs"][0]["evidence_id"] == "cell:1"
     assert quality["gates"]["model_re_review"]["status"] == "not_run"
 
 
@@ -165,4 +163,3 @@ def test_finding_quality_rejects_unknown_gate_status():
             finding_id="legacy:test",
             gates={"deterministic_cross_check": {"status": "maybe"}},
         )
-

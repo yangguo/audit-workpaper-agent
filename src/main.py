@@ -450,7 +450,9 @@ async def export_findings(review_id: str, format: str = Query("xlsx")):
     if format != "xlsx":
         raise HTTPException(status_code=400, detail="unsupported format")
 
-    xlsx_bytes = generate_findings_xlsx(payload["findings"])
+    xlsx_bytes = generate_findings_xlsx(
+        payload["findings"], report_metadata=payload
+    )
     filename = f"findings_{review_id}.xlsx"
     return StreamingResponse(
         io.BytesIO(xlsx_bytes),
