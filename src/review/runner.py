@@ -23,6 +23,7 @@ from review.contracts import PolicyPackRef, ReviewManifest
 from review.evidence import build_evidence_graph, build_input_files, sha256_file
 from review.evidence_provenance import EvidenceProvenanceIndex, verify_finding_evidence
 from review.evaluators import execute_policy_plan
+from review.finding_comparison import compare_finding_sets
 from review.findings import build_v2_findings, project_v2_findings_to_v1
 from review.judgement import build_judgement_requests, execute_judgement_requests
 from review.llm import LLM_CALL_STATS, get_review_llm
@@ -552,6 +553,14 @@ async def _capture_stage_c_shadow(
             store.write_judgements, review_id, judgement_payload
         )
         await asyncio.to_thread(store.write_v2_findings, review_id, v2_payload)
+        legacy_payload = load_findings(review_id) or {}
+        comparison = compare_finding_sets(
+            legacy_payload.get("findings", [])
+            if isinstance(legacy_payload, dict)
+            else [],
+            v2_findings,
+        )
+        await asyncio.to_thread(store.write_comparison, review_id, comparison)
         return None
     except Exception as e:
         _logger.exception("stage c shadow capture %s failed", review_id)

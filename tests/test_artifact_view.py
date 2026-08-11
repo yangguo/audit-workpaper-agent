@@ -108,6 +108,32 @@ def test_build_artifact_view_marks_stage_c_disabled_when_not_configured():
     assert payload["stages"]["stage_c"] == {"status": "disabled", "findings": []}
 
 
+def test_build_artifact_view_exposes_bounded_v1_shadow_comparison():
+    payload = build_artifact_view(
+        review_id="rid-compare",
+        manifest=_manifest(),
+        comparison={
+            "schema_version": "review-finding-comparison/1",
+            "counts": {"agreement": 1, "legacy_only": 2},
+            "items": [
+                {
+                    "category": "legacy_only",
+                    "legacy_finding_id": "legacy-1",
+                    "shadow_finding_id": None,
+                    "v1_status": "fail",
+                    "v2_status": None,
+                }
+            ],
+        },
+    )
+
+    assert payload["comparison"]["status"] == "available"
+    assert payload["comparison"]["authority"] == "v1"
+    assert payload["comparison"]["candidate_source"] == "stage_c_shadow"
+    assert payload["comparison"]["counts"]["legacy_only"] == 2
+    assert payload["comparison"]["items"][0]["legacy_finding_id"] == "legacy-1"
+
+
 @pytest.mark.asyncio
 async def test_review_artifact_route_returns_bounded_payload(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))

@@ -24,6 +24,7 @@ from langchain_core.runnables import RunnableConfig
 from review.runner import get_status as get_review_status
 from review.artifact_view import build_artifact_view
 from review.export import generate_findings_xlsx
+from review.findings import project_v2_findings_to_v1
 from storage.findings_store import load_findings
 from storage.review_artifact_store import ReviewArtifactStore
 from utils.context import Context, request_context, new_context
@@ -442,16 +443,47 @@ async def get_findings(review_id: str):
 
 
 @app.get("/findings/{review_id}/export")
-async def export_findings(review_id: str, format: str = Query("xlsx")):
+async def export_findings(
+    review_id: str,
+    format: str = Query("xlsx"),
+    source: str = Query("legacy"),
+):
     """Export review findings as an Excel report."""
     payload = load_findings(review_id)
-    if not payload or not payload.get("findings"):
+    if not payload:
         raise HTTPException(status_code=404, detail="findings not found or empty")
     if format != "xlsx":
         raise HTTPException(status_code=400, detail="unsupported format")
 
+    selected_findings = payload.get("findings") or []
+    selected_metadata = dict(payload)
+    source_key = str(source or "legacy").strip().lower()
+    if source_key == "stage_c_shadow":
+        store = ReviewArtifactStore()
+        manifest = store.load_manifest(review_id)
+        v2_payload = store.load_json(review_id, "v2-findings.json")
+        if (
+            manifest is None
+            or manifest.get("artifact_status") != "completed"
+            or not isinstance(v2_payload, dict)
+            or not isinstance(v2_payload.get("findings"), list)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="stage_c_shadow artifact is not available for this review",
+            )
+        selected_findings = project_v2_findings_to_v1(v2_payload["findings"])
+        selected_metadata["source"] = "stage_c_shadow"
+        selected_metadata["stats"] = v2_payload.get("stats") or {}
+        selected_metadata["created_at"] = manifest.get(
+            "created_at", selected_metadata.get("created_at")
+        )
+
+    if not selected_findings:
+        raise HTTPException(status_code=404, detail="findings not found or empty")
+
     xlsx_bytes = generate_findings_xlsx(
-        payload["findings"], report_metadata=payload
+        selected_findings, report_metadata=selected_metadata
     )
     filename = f"findings_{review_id}.xlsx"
     return StreamingResponse(
@@ -494,6 +526,7 @@ async def review_artifact(review_id: str):
             plan=store.load_json(review_id, "review-plan.json"),
             policy_findings=store.load_json(review_id, "policy-findings.json"),
             v2_findings=store.load_json(review_id, "v2-findings.json"),
+            comparison=store.load_json(review_id, "comparison.json"),
         )
     except ValueError:
         raise HTTPException(status_code=404, detail="review artifact not found")

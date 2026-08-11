@@ -102,6 +102,54 @@ function StageCard({
   );
 }
 
+const COMPARISON_LABELS: Record<string, string> = {
+  agreement: "一致",
+  legacy_only: "V1 独有",
+  shadow_only: "Shadow 独有",
+  status_conflict: "状态冲突",
+  evidence_conflict: "证据冲突",
+  not_comparable: "不可比较",
+};
+
+function ComparisonSummary({
+  comparison,
+}: {
+  comparison: NonNullable<ReviewArtifactPayload["comparison"]>;
+}) {
+  if (comparison.status !== "available") return null;
+  const entries = Object.entries(comparison.counts).filter(([, count]) => count > 0);
+  return (
+    <div
+      data-testid="finding-comparison"
+      className="mt-4 rounded-xl border border-blue-200 bg-white/80 p-3"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold text-slate-900">V1 / Shadow 逐条对照</p>
+        <span className="rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700">
+          候选差异，尚未成为权威结论
+        </span>
+      </div>
+      <p className="mt-1 text-xs leading-5 text-slate-500">
+        当前权威来源：V1；Stage C 仅作为可回溯的候选来源。
+      </p>
+      {entries.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {entries.map(([category, count]) => (
+            <span
+              key={category}
+              className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700"
+            >
+              {COMPARISON_LABELS[category] || category}：{count}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-slate-500">暂无可比较的 V1 / Shadow 发现。</p>
+      )}
+    </div>
+  );
+}
+
 export function ReviewArtifactPanel({
   artifact,
 }: {
@@ -178,6 +226,10 @@ export function ReviewArtifactPanel({
           status={stageC.status}
         />
       </div>
+
+      {artifact.comparison ? (
+        <ComparisonSummary comparison={artifact.comparison} />
+      ) : null}
 
       {stageB.findings.length > 0 ? (
         <div className="mt-5">

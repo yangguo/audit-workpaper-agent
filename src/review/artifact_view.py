@@ -114,6 +114,72 @@ def _findings_view(value: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _comparison_view(value: Any) -> dict[str, Any]:
+    """Expose only bounded IDs/statuses from the V1/V2 comparison artifact."""
+    categories = (
+        "agreement",
+        "legacy_only",
+        "shadow_only",
+        "status_conflict",
+        "evidence_conflict",
+        "not_comparable",
+    )
+    if not isinstance(value, dict):
+        return {
+            "status": "not_available",
+            "authority": "v1",
+            "candidate_source": "stage_c_shadow",
+            "counts": {category: 0 for category in categories},
+            "items": [],
+        }
+
+    def _count(raw: Any) -> int:
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    raw_counts = value.get("counts")
+    counts = {
+        category: _count(raw_counts.get(category, 0))
+        if isinstance(raw_counts, dict)
+        else 0
+        for category in categories
+    }
+    allowed = {
+        "category",
+        "legacy_finding_id",
+        "shadow_finding_id",
+        "v1_status",
+        "v2_status",
+        "v1_evidence_ids",
+        "v2_evidence_ids",
+        "reason_code",
+    }
+    items: list[dict[str, Any]] = []
+    raw_items = value.get("items")
+    if isinstance(raw_items, list):
+        for raw in raw_items[:_MAX_FINDINGS]:
+            if not isinstance(raw, dict):
+                continue
+            item = {
+                str(key): raw[key]
+                for key in allowed
+                if key in raw
+                and isinstance(raw[key], (str, int, float, bool, list, type(None)))
+            }
+            if item:
+                items.append(item)
+    return {
+        "status": "available",
+        "authority": "v1",
+        "candidate_source": "stage_c_shadow",
+        "schema_version": value.get("schema_version", ""),
+        "counts": counts,
+        "items": items,
+    }
+
+
 def _stage_a_view(
     *,
     artifact_status: str,
@@ -214,6 +280,7 @@ def build_artifact_view(
     plan: Any = None,
     policy_findings: Any = None,
     v2_findings: Any = None,
+    comparison: Any = None,
 ) -> dict[str, Any]:
     """Build the bounded payload exposed to the workbench."""
     artifact_status = str(manifest.get("artifact_status", "running"))
@@ -232,6 +299,7 @@ def build_artifact_view(
             for item in (_input_view(value) for value in manifest.get("inputs", []))
             if item
         ],
+        "comparison": _comparison_view(comparison),
         "stages": {
             "stage_a": _stage_a_view(
                 artifact_status=artifact_status,

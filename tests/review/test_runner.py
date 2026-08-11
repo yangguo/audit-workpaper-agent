@@ -187,6 +187,9 @@ async def test_stage_c_shadow_writes_judgements_and_v2_findings_without_changing
     v2_findings = json.loads(
         (artifact_dir / "v2-findings.json").read_text("utf-8")
     )
+    comparison = json.loads(
+        (artifact_dir / "comparison.json").read_text("utf-8")
+    )
 
     assert get_status(review_id)["status"] == "completed"
     assert get_status(review_id)["artifact_status"] == "completed"
@@ -199,6 +202,15 @@ async def test_stage_c_shadow_writes_judgements_and_v2_findings_without_changing
     assert judgements["results"]
     assert v2_findings["schema_version"] == "stage-c-v2-findings/1"
     assert v2_findings["findings"]
+    assert comparison["schema_version"] == "review-finding-comparison/1"
+    assert set(comparison["counts"]) == {
+        "agreement",
+        "legacy_only",
+        "shadow_only",
+        "status_conflict",
+        "evidence_conflict",
+        "not_comparable",
+    }
     assert load_findings(review_id) == v1_payload
 
 

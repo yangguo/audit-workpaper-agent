@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from main import app
 from review.export import generate_findings_xlsx
+from review.contracts import ReviewManifest
+from storage.review_artifact_store import ReviewArtifactStore
 
 
 @pytest.fixture
@@ -78,6 +80,87 @@ def test_export_findings_missing_returns_404(client, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     res = client.get("/findings/notexist/export?format=xlsx")
     assert res.status_code == 404
+
+
+def test_export_findings_explicit_stage_c_shadow_uses_candidate_artifact(
+    client, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    results_dir = tmp_path / "assets" / "results"
+    results_dir.mkdir(parents=True)
+    payload = {
+        "review_id": "r-shadow",
+        "created_at": "2026-08-11T00:00:00",
+        "source": "test.xlsx",
+        "stats": {"total_findings": 0, "by_severity": {}},
+        "findings": [],
+    }
+    (results_dir / "r-shadow_findings.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    store = ReviewArtifactStore()
+    store.begin(ReviewManifest(review_id="r-shadow", source="test.xlsx"))
+    store.write_v2_findings(
+        "r-shadow",
+        {
+            "schema_version": "stage-c-v2-findings/1",
+            "source_sha256": "sha-shadow",
+            "findings": [
+                {
+                    "finding_id": "finding:v2-1",
+                    "identity_key": "judgement:1",
+                    "issue_type": "候选问题",
+                    "severity": "P1",
+                    "risk_type": "证据不足",
+                    "sheet": "SA-1",
+                    "cell": "C5",
+                    "status": "unknown",
+                    "decision": "insufficient",
+                    "verification_status": "insufficient",
+                    "basis": "shadow basis",
+                    "suggestion": "shadow suggestion",
+                    "evidence_refs_v2": [],
+                }
+            ],
+            "stats": {"total_findings": 1},
+        },
+    )
+    store.complete("r-shadow")
+
+    res = client.get("/findings/r-shadow/export?format=xlsx&source=stage_c_shadow")
+
+    assert res.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(res.content))
+    assert wb["审阅发现汇总"].cell(row=2, column=4).value == "候选问题"
+    summary_values = [
+        wb["审阅运行摘要"].cell(row=row, column=2).value
+        for row in range(2, wb["审阅运行摘要"].max_row + 1)
+    ]
+    assert "stage_c_shadow" in summary_values
+
+
+def test_export_findings_missing_stage_c_shadow_returns_conflict(
+    client, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    results_dir = tmp_path / "assets" / "results"
+    results_dir.mkdir(parents=True)
+    (results_dir / "r-no-shadow_findings.json").write_text(
+        json.dumps(
+            {
+                "review_id": "r-no-shadow",
+                "findings": [{"issue_type": "V1"}],
+                "stats": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    res = client.get(
+        "/findings/r-no-shadow/export?format=xlsx&source=stage_c_shadow"
+    )
+
+    assert res.status_code == 409
 
 
 EXPECTED_HEADERS = [

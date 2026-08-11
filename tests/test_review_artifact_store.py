@@ -133,6 +133,17 @@ def test_artifact_store_writes_stage_c_judgements_and_v2_findings_atomically(
     assert json.loads((artifact_dir / "v2-findings.json").read_text("utf-8")) == v2_findings
 
 
+def test_artifact_store_writes_comparison_artifact_atomically(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    store = ReviewArtifactStore()
+    store.begin(_manifest("review-comparison"))
+    comparison = {"schema_version": "review-finding-comparison/1", "counts": {"agreement": 1}}
+
+    store.write_comparison("review-comparison", comparison)
+
+    assert store.load_json("review-comparison", "comparison.json") == comparison
+
+
 def test_artifact_store_marks_failure_without_marking_completed(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     store = ReviewArtifactStore()

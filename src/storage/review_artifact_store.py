@@ -19,6 +19,7 @@ _READABLE_ARTIFACT_FILES = frozenset(
         "review-plan.json",
         "policy-findings.json",
         "v2-findings.json",
+        "comparison.json",
     }
 )
 
@@ -222,6 +223,13 @@ class ReviewArtifactStore:
         """Persist V2 findings separately from the authoritative V1 findings."""
         return self._atomic_write(
             self._artifact_dir(review_id) / "v2-findings.json",
+            self._to_json_payload(payload),
+        )
+
+    def write_comparison(self, review_id: str, payload: Any) -> Path:
+        """Persist the bounded V1/V2 comparison separately from both sources."""
+        return self._atomic_write(
+            self._artifact_dir(review_id) / "comparison.json",
             self._to_json_payload(payload),
         )
 

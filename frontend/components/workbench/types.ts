@@ -304,6 +304,20 @@ export type ReviewArtifactPayload = {
   source_sha256?: string;
   requested_sheets?: string[];
   inputs?: ArtifactInput[];
+  comparison?: {
+    status: "available" | "not_available";
+    authority: "v1";
+    candidate_source: "stage_c_shadow";
+    counts: Record<string, number>;
+    items?: Array<{
+      category?: string;
+      legacy_finding_id?: string | null;
+      shadow_finding_id?: string | null;
+      v1_status?: string | null;
+      v2_status?: string | null;
+      reason_code?: string;
+    }>;
+  };
   stages: {
     stage_a: {
       status: ArtifactStageStatus;

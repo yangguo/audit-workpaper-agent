@@ -258,6 +258,16 @@ describe("WorkbenchShell", () => {
         artifact={{
           review_id: "rid-artifact",
           artifact_status: "completed",
+          comparison: {
+            status: "available",
+            authority: "v1",
+            candidate_source: "stage_c_shadow",
+            counts: {
+              agreement: 1,
+              status_conflict: 1,
+              shadow_only: 2,
+            },
+          },
           stages: {
             stage_a: {
               status: "completed",
@@ -293,6 +303,12 @@ describe("WorkbenchShell", () => {
     expect(screen.getByText("Evidence-First 过程")).toBeInTheDocument();
     expect(screen.getByText("阶段 B 规则候选")).toBeInTheDocument();
     expect(screen.getByText("证据位置：SA-4c!D12")).toBeInTheDocument();
+    expect(screen.getByTestId("finding-comparison")).toHaveTextContent(
+      "候选差异，尚未成为权威结论",
+    );
+    expect(screen.getByTestId("finding-comparison")).toHaveTextContent(
+      "状态冲突：1",
+    );
     expect(screen.getByText("V1 结果")).toBeInTheDocument();
   });
 
