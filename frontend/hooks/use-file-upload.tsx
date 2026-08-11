@@ -3,6 +3,11 @@
 import { useState, useRef, useEffect, ChangeEvent } from "react";
 import { toast } from "sonner";
 
+function pathBasename(path: string): string {
+  const sep = path.includes("/") ? "/" : "\\";
+  return path.split(sep).pop() || path;
+}
+
 const SUPPORTED_EXTENSIONS = [
   ".zip",
   ".tar",
@@ -41,6 +46,12 @@ interface ContentBlock {
   uploadStatus?: "ready" | "uploading" | "failed";
 }
 
+export interface ProjectFile {
+  name: string;
+  path: string;
+  sha256?: string;
+}
+
 interface UseFileUploadOptions {
   initialBlocks?: ContentBlock[];
 }
@@ -48,6 +59,10 @@ interface UseFileUploadOptions {
 export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {}) {
   const [contentBlocks, setContentBlocks] = useState<ContentBlock[]>(initialBlocks);
   const [attachmentDirectoryFiles, setAttachmentDirectoryFiles] = useState<File[]>([]);
+  // Thread-scoped uploaded material. Survives between composer submissions until
+  // the user explicitly starts a new review (resetProjectFiles).
+  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
+  const [projectAttachmentDir, setProjectAttachmentDir] = useState<string | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragCounter = useRef(0);
@@ -75,7 +90,7 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
       });
       const rawText = await res.text();
       let data: {
-        files?: Array<{ path?: string; saved_path?: string }>;
+        files?: Array<{ path?: string; saved_path?: string; sha256?: string }>;
         error?: string;
         detail?: string;
       } = {};
@@ -85,9 +100,31 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
         throw new Error(rawText || `Upload failed (${res.status})`);
       }
       if (!res.ok) throw new Error(data?.error || data?.detail || `Upload failed (${res.status})`);
-      return (data.files || [])
+      const resultPaths = (data.files || [])
         .map((f) => f.path || f.saved_path)
         .filter((p): p is string => typeof p === "string" && p.length > 0);
+
+      // Pair returned server paths with the original File names so we can keep
+      // a thread-scoped project file list.
+      const newProjectFiles: ProjectFile[] = resultPaths
+        .map((path, index) => ({
+          name: files[index]?.name || pathBasename(path),
+          path,
+          sha256: data.files?.[index]?.sha256,
+        }))
+        .filter((f) => f.path);
+
+      setProjectFiles((prev) => {
+        const merged = [...prev];
+        for (const f of newProjectFiles) {
+          if (!merged.some((p) => p.path === f.path)) {
+            merged.push(f);
+          }
+        }
+        return merged;
+      });
+
+      return resultPaths;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -120,6 +157,7 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
       }
       if (!res.ok) throw new Error(data?.error || data?.detail || `Upload failed (${res.status})`);
       if (!data.directory) throw new Error("附件目录上传成功但未返回目录路径");
+      setProjectAttachmentDir(data.directory);
       return data.directory;
     } finally {
       clearTimeout(timeoutId);
@@ -242,6 +280,12 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
     setAttachmentDirectoryFiles([]);
   };
 
+  const resetProjectFiles = () => {
+    setProjectFiles([]);
+    setProjectAttachmentDir(null);
+    resetBlocks();
+  };
+
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
     const items = e.clipboardData.items;
     if (!items) return;
@@ -265,11 +309,14 @@ export function useFileUpload({ initialBlocks = [] }: UseFileUploadOptions = {})
     dropRef,
     removeBlock,
     resetBlocks,
+    resetProjectFiles,
     dragOver,
     handlePaste,
     uploadFiles,
     attachmentDirectoryFiles,
     handleAttachmentDirectoryUpload,
     uploadAttachmentDirectory,
+    projectFiles,
+    projectAttachmentDir,
   };
 }
