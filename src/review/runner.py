@@ -21,6 +21,7 @@ from review.attachments import build_attachment_index, load_attachments_preview_
 from review.checkpoints import load_checkpoints_xlsx
 from review.contracts import PolicyPackRef, ReviewManifest
 from review.evidence import build_evidence_graph, build_input_files, sha256_file
+from review.evidence_provenance import EvidenceProvenanceIndex, verify_finding_evidence
 from review.evaluators import execute_policy_plan
 from review.findings import build_v2_findings, project_v2_findings_to_v1
 from review.judgement import build_judgement_requests, execute_judgement_requests
@@ -28,6 +29,7 @@ from review.llm import LLM_CALL_STATS, get_review_llm
 from review.planner import build_review_plan
 from review.policy import load_policy_pack
 from review.pipeline import run_review
+from review.result_quality import build_quality_envelope
 from storage.findings_store import load_findings, save_findings
 from storage.review_artifact_store import ReviewArtifactStore
 
@@ -65,6 +67,77 @@ def _stage_c_judgement_config() -> tuple[str, str, str, str | None, int]:
     if max_requests <= 0:
         raise ValueError("REVIEW_JUDGEMENT_MAX_REQUESTS must be greater than zero")
     return mode, pack_id, pack_version, root, max_requests
+
+
+def _result_quality_config() -> str:
+    mode = os.getenv("REVIEW_RESULT_QUALITY_MODE", "shadow").strip().lower()
+    if mode not in {"off", "shadow", "on"}:
+        raise ValueError("REVIEW_RESULT_QUALITY_MODE must be off, shadow or on")
+    return mode
+
+
+def _attach_result_quality(
+    *,
+    findings: list[dict],
+    workbook,
+    file_path: str,
+    attachments: Optional[dict[str, object]],
+) -> tuple[list[dict], dict]:
+    """Attach quality metadata while preserving legacy V1 by default."""
+    mode = _result_quality_config()
+    if mode == "off":
+        return findings, {
+            "mode": "off",
+            "total_findings": len(findings),
+            "citation_status": {},
+            "rejected_refs": 0,
+            "downgraded_findings": 0,
+        }
+
+    source_sha256 = sha256_file(file_path)
+    graph = build_evidence_graph(workbook, source_sha256=source_sha256)
+    index = EvidenceProvenanceIndex(
+        graph,
+        attachments=attachments or {},
+        workbook=workbook,
+    )
+    engine_version = (
+        os.getenv("REVIEW_ENGINE_VERSION", "stage-a-quality-shadow").strip()
+        or "stage-a-quality-shadow"
+    )
+    status_counts: dict[str, int] = {}
+    rejected_refs = 0
+    downgraded_findings = 0
+    enriched: list[dict] = []
+    for finding in findings:
+        original = dict(finding)
+        checked, verification = verify_finding_evidence(original, index)
+        output = checked if mode == "on" else original
+        if mode == "on" and checked.get("status") != original.get("status"):
+            downgraded_findings += 1
+        quality = build_quality_envelope(
+            output,
+            input_sha256=source_sha256,
+            engine_version=engine_version,
+            verified_refs=verification.accepted_refs,
+            rejected_count=verification.rejected_count,
+            rejection_codes=verification.rejection_codes,
+            citation_status=verification.status,
+        )
+        output["quality"] = quality
+        output.setdefault("finding_id", quality["finding_id"])
+        enriched.append(output)
+        status_counts[verification.status] = status_counts.get(verification.status, 0) + 1
+        rejected_refs += verification.rejected_count
+
+    return enriched, {
+        "mode": mode,
+        "total_findings": len(enriched),
+        "citation_status": status_counts,
+        "rejected_refs": rejected_refs,
+        "downgraded_findings": downgraded_findings,
+        "input_sha256": source_sha256,
+    }
 
 
 def _now() -> str:
@@ -250,6 +323,29 @@ async def _run_review(
             llm=llm,
             on_progress=_make_progress_cb(review_id),
         )
+        legacy_findings = findings
+        try:
+            findings, quality_stats = _attach_result_quality(
+                findings=findings,
+                workbook=wb,
+                file_path=pinned_file_path,
+                attachments=attachments,
+            )
+        except Exception as exc:
+            # Quality metadata is additive. A malformed/temporarily
+            # unavailable provenance index must not turn a completed V1 review
+            # into a failed review; the shadow artifact records its own error.
+            _logger.exception("review quality capture %s failed", review_id)
+            findings = legacy_findings
+            quality_stats = {
+                "mode": os.getenv("REVIEW_RESULT_QUALITY_MODE", "shadow"),
+                "total_findings": len(findings),
+                "citation_status": {},
+                "rejected_refs": 0,
+                "downgraded_findings": 0,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        stats["quality"] = quality_stats
         save_findings(review_id, findings, stats, source=source)
         entry = _REGISTRY.get(review_id)
         if entry is not None:
@@ -266,7 +362,7 @@ async def _run_review(
                         attachments_preview_path=pinned_attachments_path,
                         sheets=sheets,
                         source=source,
-                        findings=findings,
+                        findings=legacy_findings,
                         stats=stats,
                         llm=llm,
                         attachments=attachments,

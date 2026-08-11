@@ -124,6 +124,31 @@ async def test_review_completes_and_writes_findings(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fields(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("REVIEW_RESULT_QUALITY_MODE", "shadow")
+    wp = _make_workbook(tmp_path)
+    review_id = await start_review(file_path=wp, source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+
+    payload = load_findings(review_id)
+    assert payload is not None
+    finding = payload["findings"][0]
+    assert finding["quality"]["schema_version"] == "review-quality/1"
+    assert finding["quality"]["provenance"]["input_sha256"]
+    assert finding["quality"]["finding_id"].startswith("legacy:")
+    assert finding["quality"]["citation_validation"]["status"] in {
+        "verified",
+        "partial",
+        "invalid",
+        "not_available",
+    }
+    assert finding["issue_type"] == "特权账号识别范围可能不完整"
+
+
+@pytest.mark.asyncio
 async def test_completed_review_starts_shadow_artifact_without_changing_v1_result(tmp_path):
     review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
 
