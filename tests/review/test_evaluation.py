@@ -145,3 +145,174 @@ def test_evaluation_script_help_works_when_run_as_a_file():
 
     assert completed.returncode == 0, completed.stderr
     assert "gold-set manifest" in completed.stdout
+
+
+def test_evaluation_fails_promotion_when_citation_reproduction_is_not_complete():
+    manifest = _manifest()
+    manifest["cases"][0]["expected_findings"][0]["evidence_ids"] = ["cell:missing"]
+
+    result = evaluate_quality_cases(
+        manifest,
+        {
+            "case-1": [
+                {
+                    "issue_type": "覆盖性",
+                    "sheet": "SA-1",
+                    "cell": "C5",
+                    "status": "fail",
+                    "quality": {
+                        "primary_location": {
+                            "source_kind": "cell",
+                            "sheet": "SA-1",
+                            "cell_or_range": "C5",
+                        },
+                        "citation_validation": {
+                            "status": "invalid",
+                            "evidence_ids": [],
+                        },
+                        "gates": {
+                            "deterministic_cross_check": {"status": "passed"}
+                        },
+                    },
+                },
+                {
+                    "issue_type": "证据不足",
+                    "sheet": "SA-1",
+                    "cell": "C8",
+                    "status": "unknown",
+                    "quality": {
+                        "citation_validation": {"status": "not_available"},
+                        "gates": {"deterministic_cross_check": {"status": "passed"}},
+                    },
+                },
+            ]
+        },
+    )
+
+    assert result["promotion_ready"] is False
+    assert any(
+        failure["code"] == "citation_reproduction_below_100"
+        for failure in result["failures"]
+    )
+
+
+def test_evaluation_fails_when_not_run_is_mislabeled_as_passed():
+    manifest = _manifest()
+    result = evaluate_quality_cases(
+        manifest,
+        {
+            "case-1": [
+                {
+                    "issue_type": "覆盖性",
+                    "sheet": "SA-1",
+                    "cell": "C5",
+                    "status": "fail",
+                    "quality": {
+                        "citation_validation": {
+                            "status": "verified",
+                            "evidence_ids": ["cell:1"],
+                        },
+                        "gates": {
+                            "deterministic_cross_check": {
+                                "status": "passed",
+                                "reason": "not_run by configuration",
+                            }
+                        },
+                    },
+                },
+                {
+                    "issue_type": "证据不足",
+                    "sheet": "SA-1",
+                    "cell": "C8",
+                    "status": "unknown",
+                    "quality": {
+                        "citation_validation": {"status": "not_available"},
+                        "gates": {"deterministic_cross_check": {"status": "not_run"}},
+                    },
+                },
+            ]
+        },
+    )
+
+    assert result["promotion_ready"] is False
+    assert any(
+        failure["code"] == "not_run_encoded_as_passed"
+        for failure in result["failures"]
+    )
+
+
+def test_evaluation_fails_when_v2_p0_p1_precision_decreases():
+    manifest = _manifest()
+    manifest["cases"][0]["expected_findings"] = [
+        manifest["cases"][0]["expected_findings"][0]
+    ]
+    v1 = {
+        "case-1": [
+            {
+                "issue_type": "覆盖性",
+                "sheet": "SA-1",
+                "cell": "C5",
+                "status": "fail",
+                "severity": "P1",
+                "quality": {
+                    "citation_validation": {"status": "verified", "evidence_ids": ["cell:1"]},
+                    "gates": {"deterministic_cross_check": {"status": "passed"}},
+                },
+            }
+        ]
+    }
+    v2 = {
+        "case-1": [
+            {
+                "issue_type": "覆盖性",
+                "sheet": "SA-1",
+                "cell": "C5",
+                "status": "unknown",
+                "severity": "P1",
+                "quality": {
+                    "citation_validation": {"status": "verified", "evidence_ids": ["cell:1"]},
+                    "gates": {"deterministic_cross_check": {"status": "passed"}},
+                },
+            }
+        ]
+    }
+
+    result = evaluate_quality_cases(manifest, v1, v2_by_case=v2)
+
+    assert result["promotion_ready"] is False
+    assert any(
+        failure["code"] == "v2_p0_p1_precision_decreased"
+        for failure in result["failures"]
+    )
+
+
+def test_evaluation_fails_when_fail_finding_has_no_quality_envelope():
+    manifest = _manifest()
+    result = evaluate_quality_cases(
+        manifest,
+        {
+            "case-1": [
+                {
+                    "issue_type": "覆盖性",
+                    "sheet": "SA-1",
+                    "cell": "C5",
+                    "status": "fail",
+                    "severity": "P1",
+                },
+                {
+                    "issue_type": "证据不足",
+                    "sheet": "SA-1",
+                    "cell": "C8",
+                    "status": "unknown",
+                    "severity": "P2",
+                    "quality": {"gates": {"deterministic_cross_check": {"status": "not_run"}}},
+                },
+            ]
+        },
+    )
+
+    assert result["promotion_ready"] is False
+    assert any(
+        failure["code"] == "missing_quality_envelope"
+        for failure in result["failures"]
+    )

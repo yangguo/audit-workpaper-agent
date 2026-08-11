@@ -71,6 +71,10 @@ bash scripts/local_run.sh -m flow
 
 审阅结果页会在 V1 结果返回后继续轮询 `GET /review/{review_id}/artifact`，并在“Evidence-First 过程”面板中展示：阶段 A 的输入快照、阶段 B 的规则候选、阶段 C 的受限判断，以及每条候选对应的 Sheet/单元格和逐字证据摘录。阶段面板是只读 shadow 视图，不会替换 V1 结果；阶段 C 未配置时会明确显示“未启用”。
 
+V1 finding 卡片和 Excel 审阅包还会显示质量信封：引用是否已验证、主定位、每个复核 gate 是否实际执行、根因/重复关系、整改缺口和输入 hash 前缀。质量信封存在时，工作台只展示已验证引用，不把被拒绝的附件引用当作证据。阶段 C 完成后，Evidence-First 面板会显示 V1/Shadow 逐条对照；其中 Shadow 差异明确标记为候选，不是当前权威结论。
+
+默认导出仍为 V1：`GET /findings/{review_id}/export?format=xlsx`。只有显式请求 `source=stage_c_shadow` 才会导出 Stage C 候选；候选 artifact 缺失或尚未完成时返回 `409`，不会从 V1 猜测候选结果。
+
 工具返回值同时提供 `artifact_url`，便于 CLI 或其他客户端读取同一份受限视图。
 
 ## 审阅结果质量评估
@@ -87,6 +91,11 @@ uv run python scripts/evaluate_review_quality.py \
 
 缺少人工裁决或任一质量门禁失败时，命令返回非零状态；`promotion_ready=true` 只是
 允许进入 V1/V2 对照审阅，不代表可以自动切换 V2。
+
+发布门禁固定要求：gold set 的引用复现率为 100%，没有人工裁决的 case 不能推广，
+`not_run` 不能编码成 `passed`，且提供 V2 结果时 P0/P1 精确率不得低于 V1。回滚时
+将 `REVIEW_RESULT_QUALITY_MODE` 切回 `off`、保持导出 `source=legacy`，并保留
+`assets/reviews/<review_id>/` 中的冻结 artifact 供排查。
 
 # Docker 部署（后端）
 

@@ -42,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(manifest, dict) or not isinstance(results, dict):
         print("manifest and results must be JSON objects", file=sys.stderr)
         return 2
-    report = evaluate_quality_cases(manifest, results)
+    v2_results = results.get("v2") if isinstance(results.get("v2"), dict) else None
+    v1_results = results.get("v1") if isinstance(results.get("v1"), dict) else results
+    report = evaluate_quality_cases(manifest, v1_results, v2_by_case=v2_results)
     encoded = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(encoded + "\n", encoding="utf-8")

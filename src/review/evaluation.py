@@ -91,9 +91,76 @@ def _has_gate_status(finding: Mapping[str, Any]) -> bool:
     )
 
 
+def _not_run_encoded_as_passed(gate: Mapping[str, Any]) -> bool:
+    if str(gate.get("status", "") or "").strip() != "passed":
+        return False
+    reason = str(gate.get("reason", "") or "").strip().casefold()
+    return "not_run" in reason or "not run" in reason or "未执行" in reason
+
+
+def _p0_p1_precision(
+    manifest: Mapping[str, Any],
+    results_by_case: Mapping[str, Iterable[Mapping[str, Any]]],
+) -> float:
+    """Calculate exact status/severity precision for high-risk findings."""
+    expected_high = 0
+    actual_high = 0
+    correct = 0
+    cases = manifest.get("cases") if isinstance(manifest, Mapping) else None
+    if not isinstance(cases, list):
+        return 0.0
+    for raw_case in cases:
+        if not isinstance(raw_case, Mapping):
+            continue
+        case_id = str(raw_case.get("case_id", "") or "").strip()
+        expected = [
+            item
+            for item in _as_list(raw_case.get("expected_findings"))
+            if isinstance(item, Mapping)
+        ]
+        actual = [
+            item
+            for item in _as_list(results_by_case.get(case_id, []))
+            if isinstance(item, Mapping)
+        ]
+        actual_high += sum(
+            1 for item in actual if str(item.get("severity", "") or "") in {"P0", "P1"}
+        )
+        used: set[int] = set()
+        for expected_finding in expected:
+            if str(expected_finding.get("severity", "") or "") not in {"P0", "P1"}:
+                continue
+            expected_high += 1
+            index = next(
+                (
+                    idx
+                    for idx, actual_finding in enumerate(actual)
+                    if idx not in used
+                    and _finding_matches(expected_finding, actual_finding)
+                ),
+                None,
+            )
+            if index is None:
+                continue
+            used.add(index)
+            actual_finding = actual[index]
+            if (
+                str(actual_finding.get("severity", "") or "")
+                == str(expected_finding.get("severity", "") or "")
+                and str(actual_finding.get("status", "") or "")
+                == str(expected_finding.get("status", "") or "")
+            ):
+                correct += 1
+    if actual_high == 0:
+        return 1.0 if expected_high == 0 else 0.0
+    return correct / actual_high
+
+
 def evaluate_quality_cases(
     manifest: Mapping[str, Any],
     actual_by_case: Mapping[str, Iterable[Mapping[str, Any]]],
+    *,
+    v2_by_case: Mapping[str, Iterable[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Evaluate actual findings against a versioned gold-set manifest."""
 
@@ -199,8 +266,31 @@ def evaluate_quality_cases(
                     resolved_locations += 1
 
         for actual_finding in actual:
+            if (
+                str(actual_finding.get("status", "") or "") in {"fail", "unknown"}
+                and not isinstance(actual_finding.get("quality"), Mapping)
+            ):
+                failures.append(
+                    {
+                        "code": "missing_quality_envelope",
+                        "case_id": case_id,
+                        "finding_id": str(actual_finding.get("finding_id", "") or ""),
+                    }
+                )
             if _has_gate_status(actual_finding):
                 gate_covered += 1
+            quality = actual_finding.get("quality")
+            gates = quality.get("gates") if isinstance(quality, Mapping) else None
+            if isinstance(gates, Mapping):
+                for gate_name, gate in gates.items():
+                    if isinstance(gate, Mapping) and _not_run_encoded_as_passed(gate):
+                        failures.append(
+                            {
+                                "code": "not_run_encoded_as_passed",
+                                "case_id": case_id,
+                                "gate": str(gate_name),
+                            }
+                        )
             quality = actual_finding.get("quality")
             grouping = quality.get("grouping") if isinstance(quality, Mapping) else None
             if isinstance(grouping, Mapping) and grouping.get("duplicate_of"):
@@ -231,6 +321,26 @@ def evaluate_quality_cases(
         "gate_status_coverage": gate_covered / actual_total if actual_total else 1.0,
         "duplicate_rate": duplicate_findings / actual_total if actual_total else 0.0,
     }
+    if expected_with_evidence and metrics["citation_reproduction_rate"] < 1.0:
+        failures.append(
+            {
+                "code": "citation_reproduction_below_100",
+                "rate": metrics["citation_reproduction_rate"],
+            }
+        )
+    if v2_by_case is not None:
+        v1_precision = _p0_p1_precision(manifest, actual_by_case)
+        v2_precision = _p0_p1_precision(manifest, v2_by_case)
+        metrics["v1_p0_p1_precision"] = v1_precision
+        metrics["v2_p0_p1_precision"] = v2_precision
+        if v2_precision < v1_precision:
+            failures.append(
+                {
+                    "code": "v2_p0_p1_precision_decreased",
+                    "v1_precision": v1_precision,
+                    "v2_precision": v2_precision,
+                }
+            )
     return {
         "promotion_ready": not failures,
         "metrics": metrics,
@@ -287,4 +397,3 @@ def compare_v1_v2(
         "counts": {category: int(counts.get(category, 0)) for category in _CATEGORIES},
         "items": items,
     }
-
