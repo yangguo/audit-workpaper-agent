@@ -86,7 +86,7 @@ async def _stream_to_temp_and_hash(upload: UploadFile, target_path: Path) -> tup
     return target_path, hasher.hexdigest(), size
 
 
-_HASH_suffix_re = re.compile(r"^[0-9a-f]{64}_")
+_hash_suffix_re = re.compile(r"^[0-9a-f]{64}_")
 
 
 def _list_existing_hash_uploads(upload_dir: Path) -> dict[str, str]:
