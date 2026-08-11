@@ -465,6 +465,72 @@ def test_build_attachment_index_keeps_same_named_source_docs_separate(tmp_path):
         assert physical_path.read_bytes() == expected_bytes
 
 
+def test_build_attachment_index_continues_after_bad_docx(tmp_path):
+    """A single corrupted office document must not abort extraction for others."""
+    from review.attachments import build_attachment_index
+    att_dir = tmp_path / "atts"
+    att_dir.mkdir()
+
+    # Valid docx with an embedded image.
+    good_docx = att_dir / "good.docx"
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", b"<?xml version='1.0'?><doc/>")
+        zf.writestr("word/media/picture.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)
+    good_docx.write_bytes(buf.getvalue())
+
+    # Invalid docx that is not a zip archive.
+    bad_docx = att_dir / "bad.docx"
+    bad_docx.write_bytes(b"this is not a zip file")
+
+    idx = build_attachment_index(str(att_dir))
+
+    # Both source files are indexed as real attachments.
+    real_items = [it for it in idx["items"] if not it.rel_path.startswith(".embedded_media/")]
+    assert {it.filename for it in real_items} == {"good.docx", "bad.docx"}
+
+    # The valid docx still yields a virtual embedded-media item.
+    virtual = [it for it in idx["items"] if it.rel_path.startswith(".embedded_media/")]
+    assert any(it.rel_path == ".embedded_media/good.docx::picture.png" for it in virtual)
+
+    # The on-disk embedded file exists.
+    assert (att_dir / ".embedded_media" / "good.docx__picture.png").is_file()
+
+
+def test_build_attachment_index_cleans_stale_embedded_media(tmp_path):
+    """Pre-existing .embedded_media files must not be indexed as real attachments."""
+    from review.attachments import build_attachment_index
+    att_dir = tmp_path / "atts"
+    att_dir.mkdir()
+
+    good_docx = att_dir / "good.docx"
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", b"<?xml version='1.0'?><doc/>")
+        zf.writestr("word/media/picture.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)
+    good_docx.write_bytes(buf.getvalue())
+
+    # Seed a stale extracted file from a previous run.
+    embedded_root = att_dir / ".embedded_media"
+    embedded_root.mkdir()
+    (embedded_root / "old.docx__stale.png").write_bytes(b"stale")
+
+    idx = build_attachment_index(str(att_dir))
+
+    # The stale on-disk file is removed.
+    assert not (embedded_root / "old.docx__stale.png").exists()
+
+    # Only the current source doc's virtual item remains.
+    virtual = [it for it in idx["items"] if it.rel_path.startswith(".embedded_media/")]
+    assert [it.rel_path for it in virtual] == [".embedded_media/good.docx::picture.png"]
+
+    # No .embedded_media/ file is indexed as a real attachment.
+    real_rels = [it.rel_path for it in idx["items"] if not it.rel_path.startswith(".embedded_media/")]
+    assert all(".embedded_media" not in rel for rel in real_rels)
+
+
 def test_extract_attachment_text_handles_legacy_via_converter(tmp_path, monkeypatch):
     """Legacy .xls/.doc should be routed through the converter when available."""
     from review import attachments, legacy_convert

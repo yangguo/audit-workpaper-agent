@@ -54,7 +54,44 @@ def test_backfill_embedded_evidence_ref_uses_validated_agent_excerpt():
         "cell_or_range": "",
         "attachment": logical_path,
         "excerpt": "密码最小长度为 12 个字符",
+        "full_text": "密码最小长度为 12 个字符",
     }]
+
+
+def test_backfill_requires_the_exact_path_in_basis_even_for_agent_evidence():
+    logical_path = ".embedded_media/policy.docx::image1.png"
+    item = AttachmentFile(
+        index="",
+        rel_dir=".embedded_media",
+        filename="policy.docx::image1.png",
+        rel_path=logical_path,
+        file_type="png",
+        status="binary",
+        extraction_status="binary",
+        extracted_text="",
+    )
+    attachments = {
+        "items": [item],
+        "by_filename": {item.filename.lower(): [item]},
+        "by_rel_path": {logical_path.lower(): [item]},
+        "by_index": {},
+        "by_sheet_norm": {},
+        "ocr_by_path": {
+            logical_path.lower(): {"status": "ok", "content": "密码最小长度为 12 个字符"},
+        },
+        "agent_evidence_by_sheet": {
+            "SA10": [{"path": logical_path, "excerpt": "密码最小长度为 12 个字符"}],
+        },
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "检查《policy》后认为密码策略需要复核。",
+        "evidence_refs": [],
+    }
+
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+
+    assert out[0]["evidence_refs"] == []
 
 
 def test_backfill_embedded_evidence_refs_no_duplicate():
@@ -104,6 +141,22 @@ def test_backfill_does_not_turn_a_document_name_into_all_embedded_images():
     assert out[0]["evidence_refs"] == []
 
 
+def test_backfill_does_not_infer_an_attachment_from_a_check_verb():
+    """A document mention is not a verified citation to an embedded image."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/doca.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "通过检查《doca》，我们获取了系统密码策略。",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    assert out[0]["evidence_refs"] == []
+
+
 def test_backfill_embedded_evidence_refs_no_match_leaves_attachment_empty():
     """Document name that doesn't match any attachment should not add refs."""
     attachments = {
@@ -114,6 +167,90 @@ def test_backfill_embedded_evidence_refs_no_match_leaves_attachment_empty():
     finding = {
         "sheet": "SA-10",
         "basis": "引用了《完全不存在的文档》.",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    assert out[0]["evidence_refs"] == []
+
+
+def test_backfill_does_not_resolve_a_generic_title_via_token_overlap():
+    """Fuzzy document-name matching cannot create an auditable citation."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+            {"rel_path": ".embedded_media/sap系统数据库密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+            {"rel_path": ".embedded_media/操作系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "通过检查《SAP系统密码策略》，我们获取了系统密码策略。",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    assert out[0]["evidence_refs"] == []
+
+
+def test_backfill_does_not_use_a_snippet_to_infer_an_attachment():
+    """Only an explicit basis path plus validated Agent excerpt may backfill."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "cell": "C14",
+        "basis": "标准审计程序要求获取/检查证据，但执行描述未体现对应证据。",
+        "snippet": "1.在系统管理员协助下，通过检查《SAP系统密码策略》<C22.SA-10-1>，我们获取了系统密码策略：...",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    assert out[0]["evidence_refs"] == []
+
+
+def test_backfill_does_not_use_unverified_llm_evidence_refs():
+    """An LLM-supplied document title cannot substitute for verified evidence."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ]
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "标准审计程序要求获取/检查证据，但执行描述未体现对应证据。",
+        "snippet": "",
+        "llm_evidence_refs": json.dumps([{
+            "sheet": "SA-10",
+            "cell_or_range": "C14",
+            "attachment": "",
+            "excerpt": "通过检查《SAP系统密码策略》获取系统密码策略",
+        }], ensure_ascii=False),
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    assert out[0]["evidence_refs"] == []
+
+
+def test_backfill_does_not_mint_a_citation_from_ocr_cache_alone():
+    """Cached OCR must still be linked by a validated Agent evidence record."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ],
+        "ocr_by_path": {
+            ".embedded_media/sap应用系统密码策略.docx::image1.png": {
+                "status": "ok",
+                "provider": "mineru-precise",
+                "content": "<table><tr><td>min_password_lng</td><td>6</td></tr>"
+                           "<tr><td>min_password_specials</td><td>0</td></tr></table>",
+            },
+        },
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "未发现《sap应用系统密码策略》截图中的参数设置",
+        "snippet": "",
         "evidence_refs": [],
     }
     out = _backfill_embedded_evidence_refs([finding], attachments)

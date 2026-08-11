@@ -217,6 +217,14 @@ def get_review_llm() -> ChatOpenAI:
     kwargs = {}
     if json_mode:
         kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+
+    # Some corporate endpoints (e.g. behind Kaspersky HTTPS interception) fail
+    # certifi validation. Allow opt-out via LLM_VERIFY_SSL=false.
+    verify_ssl = str(os.getenv("LLM_VERIFY_SSL", "") or "").strip().lower() not in {"0", "false", "no", "off"}
+    import httpx
+    kwargs["http_client"] = httpx.Client(verify=verify_ssl)
+    kwargs["http_async_client"] = httpx.AsyncClient(verify=verify_ssl)
+
     return ChatOpenAI(
         model=model,
         api_key=api_key,

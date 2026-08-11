@@ -1,3 +1,5 @@
+import type { ProjectFile } from "@/hooks/use-file-upload";
+
 import type {
   AnalysisSection,
   EvidenceAgentStatsPayload,
@@ -22,6 +24,7 @@ type Input = {
     text?: string;
     metadata?: { name?: string };
   }>;
+  projectFiles?: ProjectFile[];
   messages: Array<{
     id: string;
     type: string;
@@ -81,6 +84,16 @@ function uploadedEvidence(input: Input): EvidenceItem[] {
       source: "upload",
       status: "ready",
     }));
+
+  const projectItems = (input.projectFiles || [])
+    .filter((f) => f.name)
+    .map((f, index): EvidenceItem => ({
+      id: `project-${f.name}-${index}`,
+      name: f.name,
+      source: "upload",
+      status: "ready",
+    }));
+
   if (input.archiveUrl) {
     items.push({
       id: "archive-url",
@@ -89,7 +102,8 @@ function uploadedEvidence(input: Input): EvidenceItem[] {
       status: "ready",
     });
   }
-  return items;
+
+  return [...items, ...projectItems];
 }
 
 const SEVERITY_TITLES: Record<string, string> = {

@@ -4,16 +4,83 @@ Ported from analyze_excel.py. _challenge_finding_with_llm is adapted to async
 over the project's ChatOpenAI-based llm helper.
 """
 import json
+import os
 import re
 from typing import List, Optional
 
 from openpyxl.utils import get_column_letter
 
 from review.excel_utils import _get_cell_text
+from review.evidence_agent import _excerpt_grounded
 from review.llm import _llm_chat
 from review.validation import _excerpt_matches
 
 _EXCEPTION_FLAG_TOKENS = ("是", "有异常", "Y", "异常", "缺陷", "未通过")
+_CHALLENGER_FULL_TEXT_DEFAULT = True
+_CHALLENGER_PER_REF = 2000
+_CHALLENGER_TOTAL = 6000
+_CHALLENGER_RADIUS = 800
+
+
+def _challenger_full_text_enabled() -> bool:
+    raw = os.getenv("REVIEW_CHALLENGER_FULL_TEXT", "")
+    if not raw:
+        return _CHALLENGER_FULL_TEXT_DEFAULT
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _build_attachment_evidence_snippets(refs: List[dict], per_ref: int = _CHALLENGER_PER_REF,
+                                         total_limit: int = _CHALLENGER_TOTAL,
+                                         radius: int = _CHALLENGER_RADIUS) -> List[str]:
+    """Pull bounded evidence snippets for both embedded-media OCR and real-attachments.
+
+    - For ``.embedded_media/`` paths: OCR ``full_text`` (HTML markup preserved)
+      centred on the agent's cited excerpt.
+    - For real attachment paths: directly-extracted ``attachment_text`` so
+      xlsx/docx contents reach the challenger LLM too.
+    """
+    out: List[str] = []
+    total = 0
+    for r in refs:
+        if not isinstance(r, dict):
+            continue
+        attachment = str(r.get("attachment", "") or "").strip()
+        if not attachment:
+            continue
+        body = ""
+        is_ocr = attachment.startswith(".embedded_media/")
+        if is_ocr:
+            body = str(r.get("full_text", "") or "").strip()
+        else:
+            body = str(r.get("attachment_text", "") or "").strip()
+        if not body:
+            continue
+        excerpt = str(r.get("excerpt", "") or "").strip()
+        if excerpt and len(body) > per_ref:
+            anchor = excerpt[:24]
+            position = body.find(anchor)
+            if position < 0 and len(excerpt) >= 16:
+                position = body.find(excerpt[:16])
+            if position >= 0:
+                start = max(0, position - radius)
+                end = min(len(body), position + per_ref - radius)
+                body = body[start:end]
+            else:
+                body = body[:per_ref]
+        else:
+            body = body[:per_ref]
+        body = re.sub(r"\s+", " ", body).strip()
+        if not body:
+            continue
+        remaining = max(0, total_limit - total)
+        if remaining <= 0:
+            break
+        if len(body) > remaining:
+            body = body[:remaining]
+        kind = "OCR 抓到的实际内容" if is_ocr else "附件内可直接读取的文本"
+        out.append(f"[附件 {attachment}] ({kind})\n{body}")
+        total += len(body) + len(attachment) + 32
+    return out
 
 
 def _cross_validate_finding(finding, wb) -> List[str]:
@@ -83,6 +150,24 @@ def _cross_validate_finding(finding, wb) -> List[str]:
                 issues.append("evidence_excerpt_mismatch")
                 break
 
+    # Ground evidence excerpts against cached OCR full text so an agent that
+    # hallucinates a parameter value (e.g. quoting "FAILED_LOGIN_ATTEMPTS=60"
+    # when the screenshot actually shows 10) is caught even when the workbook
+    # cells can't disprove it.
+    for r in refs if isinstance(refs, list) else []:
+        if not isinstance(r, dict):
+            continue
+        attachment = r.get("attachment", "") or ""
+        full_text = r.get("full_text", "") or ""
+        excerpt = r.get("excerpt", "") or ""
+        if not attachment.startswith(".embedded_media/"):
+            continue
+        if not full_text or not excerpt:
+            continue
+        if not _excerpt_grounded(excerpt, full_text):
+            issues.append("evidence_excerpt_mismatch_attachment")
+            break
+
     if finding.status == "fail" and finding.severity == "P0":
         if not refs:
             issues.append("high_severity_no_evidence")
@@ -91,7 +176,13 @@ def _cross_validate_finding(finding, wb) -> List[str]:
 
 
 def _build_minimal_context(finding, ws, max_chars: int = 2000) -> str:
-    """Build a minimal context (500-2000 chars) for an LLM re-review."""
+    """Build a minimal context (500-2000 chars) for an LLM re-review.
+
+    When ``REVIEW_CHALLENGER_FULL_TEXT`` is enabled (default), also injects
+    bounded OCR snippets from each embedded-media evidence_ref so the
+    adversarial challenger can verify the finding against actual screenshot
+    content instead of guessing from workbook cells alone.
+    """
     if not ws:
         return ""
     parts: List[str] = []
@@ -101,6 +192,8 @@ def _build_minimal_context(finding, ws, max_chars: int = 2000) -> str:
         refs = []
     if not isinstance(refs, list):
         refs = []
+    if _challenger_full_text_enabled():
+        parts.extend(_build_attachment_evidence_snippets(refs))
     target_cells: List[str] = []
     for r in refs[:6]:
         if isinstance(r, dict) and r.get("cell_or_range"):

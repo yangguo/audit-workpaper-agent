@@ -6,7 +6,6 @@ import dataclasses
 import json
 import logging
 import os
-import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 import openpyxl
@@ -119,18 +118,48 @@ def _accepted_agent_evidence_for_sheet(attachments, sheet: object) -> List[dict]
         result.append({"path": path, "excerpt": excerpt})
     return result
 
-
 def _backfill_embedded_evidence_refs(findings_dicts, attachments=None):
-    """Add an attachment citation only when its exact Agent excerpt verifies.
+    """Backfill only a path plus verbatim Agent excerpt that can be verified.
 
-    A document title does not identify a particular embedded image. Likewise a
-    bare path does not establish content. This post-process therefore considers
-    only a path explicitly present in a finding's basis and an accepted Agent
-    evidence record for the same Sheet, then applies the normal attachment
-    excerpt verifier before exposing it to the UI.
+    A document title, fuzzy topic match, cached OCR text, or an LLM-supplied
+    citation cannot identify a particular source. The finding's basis must
+    explicitly name the path and the evidence Agent must have supplied a
+    same-sheet excerpt that validates against the pinned attachment index.
     """
     if not findings_dicts or not attachments:
         return findings_dicts
+    ocr_cache = (attachments or {}).get("ocr_by_path") or {}
+
+    def _ocr_full_text(rel_path: str) -> str:
+        """Return the full OCR text for an embedded-media path, or empty string."""
+        candidates: List[str] = []
+        key = rel_path.lower()
+        cached = ocr_cache.get(key)
+        if isinstance(cached, dict) and str(cached.get("status", "")).lower() == "ok":
+            candidates.append(str(cached.get("content", "") or ""))
+        if "::" in key:
+            candidates.append(ocr_cache.get(key.replace("::", "__")) or "")
+        for raw in candidates:
+            if raw:
+                return raw
+        return ""
+
+    def _attachment_extracted_text(rel_path: str) -> str:
+        """Return the directly-extracted text for a real attachment from the index."""
+        if not attachments:
+            return ""
+        items = attachments.get("items") or []
+        target = str(rel_path or "").strip().lower().replace("\\", "/")
+        for item in items:
+            if not item:
+                continue
+            rel = str(getattr(item, "rel_path", "") or "").lower().replace("\\", "/")
+            if rel == target:
+                text = str(getattr(item, "extracted_text", "") or "").strip()
+                if text:
+                    return text
+        return ""
+
     for fnd in findings_dicts:
         if not isinstance(fnd, dict):
             continue
@@ -163,15 +192,23 @@ def _backfill_embedded_evidence_refs(findings_dicts, attachments=None):
             verified = _verify_attachment_evidence_refs([candidate], attachments)
             if not verified or not verified[0].get("attachment"):
                 continue
+            normalized = dict(verified[0])
+            if path.startswith(".embedded_media/"):
+                full_text = _ocr_full_text(path)
+                if full_text:
+                    normalized["full_text"] = full_text
+            else:
+                attachment_text = _attachment_extracted_text(path)
+                if attachment_text:
+                    normalized["attachment_text"] = attachment_text
             if key in refs_by_path:
                 existing = refs_by_path[key]
                 if not str(existing.get("excerpt", "") or "").strip():
-                    existing["attachment"] = verified[0]["attachment"]
-                    existing["excerpt"] = verified[0]["excerpt"]
+                    existing.update(normalized)
                     changed = True
                 continue
-            refs.append(verified[0])
-            refs_by_path[key] = refs[-1]
+            refs.append(normalized)
+            refs_by_path[key] = normalized
             changed = True
         if changed:
             fnd["evidence_refs"] = refs
@@ -330,9 +367,26 @@ async def run_review(
 
     findings_sorted = _sort_findings(findings)
 
+    # Lift attachment paths into evidence_refs[].attachment / full_text /
+    # attachment_text BEFORE the reviewer runs so it can see the actual OCR
+    # content for each finding rather than guessing from cell text alone.
+    pre_review_dicts: List[dict] = []
+    for fnd in findings_sorted:
+        d = _finding_to_dict(fnd)
+        pre_review_dicts.append(d)
+    _backfill_embedded_evidence_refs(pre_review_dicts, attachments)
+    # Mirror the backfilled refs onto the Finding objects so the reviewer (which
+    # consumes Finding instances, not dicts) sees the same content.
+    for fnd, d in zip(findings_sorted, pre_review_dicts):
+        refs = d.get("evidence_refs") or []
+        if refs:
+            object.__setattr__(
+                fnd, "evidence_refs", json.dumps(refs, ensure_ascii=False)
+            )
+
     # LLM re-review of rule-based (non-LLM-tagged) findings
     _emit_progress(on_progress, "findings_review", "", findings, "进入发现复核")
-    review = await _llm_review_findings(wb, findings_sorted, llm)
+    review = await _llm_review_findings(wb, findings_sorted, llm, attachments=attachments)
 
     # Cross-validation + adversarial challenge for P0 / needs_review findings
     cross_issues: Dict[int, List[str]] = {}

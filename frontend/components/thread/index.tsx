@@ -26,12 +26,15 @@ export function Thread() {
     dropRef,
     removeBlock: _removeBlock,
     resetBlocks,
+    resetProjectFiles,
     dragOver,
     handlePaste,
     uploadFiles,
     attachmentDirectoryFiles,
     handleAttachmentDirectoryUpload,
     uploadAttachmentDirectory,
+    projectFiles,
+    projectAttachmentDir,
   } = useFileUpload();
 
   void _removeBlock;
@@ -80,17 +83,29 @@ export function Thread() {
     }
 
     let text = parts.join("\n");
-    if (uploadedPaths.length > 0) {
+
+    // Combine thread-scoped project files with any newly uploaded files.
+    const allFilePaths = [
+      ...projectFiles.map((f) => f.path),
+      ...uploadedPaths.filter(
+        (p) => !projectFiles.some((f) => f.path === p),
+      ),
+    ];
+
+    if (allFilePaths.length > 0) {
       const suffix = [
         "已上传文件路径：",
-        ...uploadedPaths.map((p) => `- ${p}`),
+        ...allFilePaths.map((p) => `- ${p}`),
       ].join("\n");
       text = text ? `${text}\n${suffix}` : suffix;
     }
-    if (attachmentsDirPath) {
-      const suffix = `附件目录路径：\n- ${attachmentsDirPath}`;
+
+    const effectiveAttachmentsDir = attachmentsDirPath || projectAttachmentDir || "";
+    if (effectiveAttachmentsDir) {
+      const suffix = `附件目录路径：\n- ${effectiveAttachmentsDir}`;
       text = text ? `${text}\n${suffix}` : suffix;
     }
+
     return text;
   };
 
@@ -149,7 +164,11 @@ export function Thread() {
     }
 
     const text = buildMessageText(uploadedPaths, attachmentsDirPath);
-    if ((!text.trim() && contentBlocks.length === 0) || isLoading) return;
+    if (
+      (!text.trim() && contentBlocks.length === 0 && projectFiles.length === 0) ||
+      isLoading
+    )
+      return;
 
     const msgContent: Array<{
       type: string;
@@ -191,6 +210,7 @@ export function Thread() {
     status: stream.taskStatus,
     archiveUrl,
     contentBlocks,
+    projectFiles,
     messages,
     isLoading,
     elapsedSeconds: stream.elapsedSeconds,
@@ -234,6 +254,7 @@ export function Thread() {
               variant="outline"
               size="sm"
               onClick={() => {
+                resetProjectFiles();
                 setThreadId(null);
                 window.location.reload();
               }}

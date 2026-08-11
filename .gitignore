@@ -62,3 +62,7 @@ assets/results/
 
 # Virtual embedded-media directory created by build_attachment_index
 **/.embedded_media/
+
+# Local-only verification scripts (hardcoded project paths/names; not for
+# shared review). Anything under here stays on your machine.
+scripts/_private/

@@ -96,7 +96,7 @@ def test_read_attachment_rejects_escape_and_unindexed_paths():
         assert "content" not in result
 
 
-def test_validate_agent_result_accepts_only_exact_source_excerpts():
+def test_validate_agent_result_accepts_grounded_excerpts():
     index = _index(_item())
     payload = {
         "evidence": [{
@@ -126,7 +126,8 @@ def test_validate_agent_result_accepts_only_exact_source_excerpts():
     }]
     assert len(result["unresolved"]) == 3
     assert result["unresolved"][0]["reason"] == "source_not_indexed"
-    assert result["unresolved"][1]["reason"] == "excerpt_not_in_source"
+    assert result["unresolved"][1]["reason"] == "excerpt_not_grounded"
+    # unresolved[2] is the agent-supplied unresolved entry, passed through.
 
 
 def test_ocr_tool_uploads_only_indexed_binary_file_and_caches_verified_text(tmp_path):
@@ -296,6 +297,63 @@ def test_ocr_tool_rejects_unindexed_path_and_preserves_remote_failure(tmp_path):
     assert failed["reason"] == "mineru_failed"
 
 
+def test_ocr_tool_resolves_embedded_media_virtual_path(tmp_path):
+    """Embedded media rel_path uses :: but the file on disk uses __ (Windows-safe)."""
+    embedded_item = _make_embedded_item(".embedded_media/policy.docx::image1.png")
+    index = _index(embedded_item)
+    index["path"] = str(tmp_path)
+    embedded_root = tmp_path / ".embedded_media"
+    embedded_root.mkdir()
+    (embedded_root / "policy.docx__image1.png").write_bytes(b"screenshot")
+
+    captured_paths = []
+
+    class _FakeMinerU:
+        def parse_file(self, path, **kwargs):
+            captured_paths.append(path)
+            return MinerUResult(
+                status="ok",
+                text="密码长度：8",
+                provider="mineru-lightweight",
+                task_id="task-ocr",
+            )
+
+    tools = {tool.name: tool for tool in build_evidence_tools(index, mineru_client=_FakeMinerU())}
+    result = json.loads(tools["ocr_attachment"].invoke({"path": ".embedded_media/policy.docx::image1.png"}))
+
+    assert result["status"] == "ok"
+    assert result["path"] == ".embedded_media/policy.docx::image1.png"
+    assert captured_paths
+    assert captured_paths[0].name == "policy.docx__image1.png"
+    assert captured_paths[0].is_relative_to(tmp_path)
+
+
+def test_ocr_tool_uses_the_indexed_disk_path_for_embedded_media(tmp_path):
+    """The immutable attachment index, not a filename rewrite, owns disk mapping."""
+    logical_path = ".embedded_media/SA-1/policy.docx::image1.png"
+    embedded_item = _make_embedded_item(logical_path)
+    index = _index(embedded_item)
+    index["path"] = str(tmp_path)
+    index["source_rel_path_by_logical_path"] = {
+        logical_path.lower(): ".embedded_media/private/opaque-image.png",
+    }
+    physical = tmp_path / ".embedded_media" / "private" / "opaque-image.png"
+    physical.parent.mkdir(parents=True)
+    physical.write_bytes(b"screenshot")
+    captured_paths = []
+
+    class _FakeMinerU:
+        def parse_file(self, path, **kwargs):
+            captured_paths.append(path)
+            return MinerUResult(status="ok", text="密码长度：8", provider="mineru-lightweight")
+
+    tools = {tool.name: tool for tool in build_evidence_tools(index, mineru_client=_FakeMinerU())}
+    result = json.loads(tools["ocr_attachment"].invoke({"path": logical_path}))
+
+    assert result["status"] == "ok"
+    assert captured_paths == [physical]
+
+
 def test_fallback_trigger_requires_directory_and_evidence_gap(monkeypatch):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -414,6 +472,44 @@ def test_item_summary_marks_embedded_media_source_document():
     assert s["source_document"] == "2-备份日志.docx"
     assert s["media_name"] == "image1.png"
     assert s["rel_path"] == ".embedded_media/2-备份日志.docx::image1.png"
+
+
+def test_strip_html_removes_tags_and_entities():
+    """OCR text is passed through verbatim so the LLM can cite raw substrings."""
+    from review.evidence_agent import _source_text
+    embedded_item = _make_embedded_item(".embedded_media/policy.docx::image1.png")
+    index = _index(embedded_item)
+    raw_html = "<table><tr><td>min_password_lng</td><td>6</td></tr></table>"
+    index["ocr_by_path"] = {
+        ".embedded_media/policy.docx::image1.png": {
+            "status": "ok",
+            "provider": "mineru-precise",
+            "content": raw_html,
+        },
+    }
+    text = _source_text(index, embedded_item)
+    # Raw HTML is preserved so the agent can substring-match cell contents.
+    assert text == raw_html
+    assert "min_password_lng" in text
+
+
+def test_persist_ocr_artifact_writes_raw_text(monkeypatch, tmp_path):
+    """Raw OCR text is written next to the review artifact."""
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    from review.evidence_agent import _persist_ocr_artifact
+    _persist_ocr_artifact(
+        review_id="abc123",
+        rel_path=".embedded_media/policy.docx::image1.png",
+        provider="mineru-precise",
+        content="<table><tr><td>min_password_lng</td><td>6</td></tr></table>",
+    )
+    out_dir = tmp_path / "assets" / "reviews" / "abc123" / "ocr"
+    files = list(out_dir.glob("*.txt"))
+    assert len(files) == 1
+    body = files[0].read_text(encoding="utf-8")
+    assert "<table>" in body
+    assert "min_password_lng" in body
+    assert "review_id=abc123" in body
 
 
 def test_item_summary_omits_source_for_real_attachments():

@@ -110,11 +110,11 @@ except ImportError:  # pragma: no cover
 
 
 def extract_pdf_media(pdf_path: Path) -> List[ExtractedMedia]:
-    """Extract embedded images from a PDF. Uses pypdf if available; else returns [].
+    """Extract embedded PDF images when pypdf can expose them.
 
-    ``media_index`` is a 1-based contiguous index of emitted images (only
-    incremented when an image is appended), and ``media_filename`` embeds the
-    originating page number for traceback.
+    The index keeps each image behind a stable logical path. It is only used
+    after the evidence Agent explicitly selects the path and supplies a
+    verifiable excerpt, so extracting images does not itself create a citation.
     """
     if _PdfReader is None:
         _logger.warning("pypdf not installed; skipping PDF embedded media")
@@ -129,8 +129,8 @@ def extract_pdf_media(pdf_path: Path) -> List[ExtractedMedia]:
             except Exception:
                 continue
             for img in page_images:
-                # pypdf returns ImageFile objects with .data/.ext, but for
-                # extensibility also accept plain (data, ext) tuples.
+                # pypdf returns ImageFile objects with .data/.ext, but accept
+                # plain (data, ext) tuples as well for compatibility.
                 if isinstance(img, tuple):
                     data = img[0] if len(img) > 0 else None
                     ext = (img[1] if len(img) > 1 else "") or "png"
@@ -141,7 +141,7 @@ def extract_pdf_media(pdf_path: Path) -> List[ExtractedMedia]:
                     continue
                 media_index += 1
                 ext = ext.lower().lstrip(".") or "png"
-                if ext not in {e.lstrip(".") for e in _IMAGE_EXTS}:
+                if ext not in {suffix.lstrip(".") for suffix in _IMAGE_EXTS}:
                     ext = "png"
                 out.append(ExtractedMedia(
                     source_rel_path=pdf_path.name,
