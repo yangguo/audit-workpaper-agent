@@ -139,6 +139,8 @@ docker run -d \
 | `AGENT_LLM_MAX_TOKENS` | 否 | Agent LLM 最大 token 数，默认 `10000` |
 | `AGENT_LLM_TIMEOUT` | 否 | Agent LLM 超时（秒），默认 `600` |
 | `REVIEW_LLM_MODEL` | 否 | 审阅引擎 LLM 模型，默认 `doubao-seed-1-6-251015` |
+| `REVIEW_RESULT_QUALITY_MODE` | 否 | 结果质量信封：`shadow`（默认，仅记录）/`on`（对无证据失败降级）/`off` |
+| `REVIEW_DETERMINISTIC_CROSSCHECK_MODE` | 否 | 确定性交叉校验：`all_findings`（默认）、`p0_only`、`off` |
 | `REVIEW_EVIDENCE_AGENT_MODE` | 否 | 受限证据调查 Agent：`off`、`fallback`、`always`；默认 `fallback` |
 | `REVIEW_EVIDENCE_AGENT_MAX_STEPS` | 否 | 单个 Sheet 的证据调查最大 Agent 步数，默认 `8` |
 | `REVIEW_POLICY_MODE` | 否 | 阶段 B 策略 shadow：`shadow` 或 `off`；默认 `shadow` |

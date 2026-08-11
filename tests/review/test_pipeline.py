@@ -5,6 +5,7 @@ import openpyxl
 import pytest
 from langchain_core.messages import AIMessage
 
+import review.pipeline as pipeline_mod
 from review.pipeline import run_review, _parse_sheet_filter, _finding_to_dict, _backfill_embedded_evidence_refs
 from review.models import AttachmentFile, Finding
 
@@ -335,6 +336,55 @@ async def test_run_review_scope_finding_only(monkeypatch):
     assert f0["challenge_verdict"] is None
     assert stats["total_findings"] == 1
     assert stats["by_severity"]["P1"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_review_records_gate_status_for_non_p0_findings(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    monkeypatch.setenv("REVIEW_DETERMINISTIC_CROSSCHECK_MODE", "all_findings")
+    cross_checked = []
+
+    def _cross_check(finding, workbook):
+        cross_checked.append(finding.issue_type)
+        return []
+
+    monkeypatch.setattr(pipeline_mod, "_cross_validate_finding", _cross_check)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SA-4c"
+    ws["A1"] = "管理员账号识别情况"
+    llm = _FakeLLM(_pass_review_payload())
+
+    findings, _ = await run_review(
+        wb=wb, checkpoints={}, attachments_preview={}, sheets=None, llm=llm,
+    )
+
+    assert cross_checked
+    gates = findings[0]["quality_gates"]
+    assert gates["deterministic_cross_check"]["status"] == "passed"
+    assert gates["adversarial_challenge"]["status"] == "not_run"
+    assert gates["adversarial_challenge"]["reason"]
+    assert gates["model_re_review"]["status"] in {
+        "passed", "flagged", "not_run", "error",
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_review_marks_cross_check_not_run_when_disabled(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    monkeypatch.setenv("REVIEW_DETERMINISTIC_CROSSCHECK_MODE", "off")
+    wb = openpyxl.Workbook()
+    wb.active.title = "SA-4c"
+    wb.active["A1"] = "管理员账号识别情况"
+
+    findings, _ = await run_review(
+        wb=wb, checkpoints={}, attachments_preview={}, sheets=None,
+        llm=_FakeLLM(_pass_review_payload()),
+    )
+
+    gate = findings[0]["quality_gates"]["deterministic_cross_check"]
+    assert gate["status"] == "not_run"
+    assert "disabled" in gate["reason"]
 
 
 @pytest.mark.asyncio

@@ -106,12 +106,15 @@ def _attach_result_quality(
         or "stage-a-quality-shadow"
     )
     status_counts: dict[str, int] = {}
+    gate_counts: dict[str, dict[str, int]] = {}
     rejected_refs = 0
     downgraded_findings = 0
     enriched: list[dict] = []
     for finding in findings:
         original = dict(finding)
+        gate_payload = original.pop("quality_gates", {})
         checked, verification = verify_finding_evidence(original, index)
+        checked.pop("quality_gates", None)
         output = checked if mode == "on" else original
         if mode == "on" and checked.get("status") != original.get("status"):
             downgraded_findings += 1
@@ -123,12 +126,21 @@ def _attach_result_quality(
             rejected_count=verification.rejected_count,
             rejection_codes=verification.rejection_codes,
             citation_status=verification.status,
+            gates=gate_payload if isinstance(gate_payload, dict) else {},
         )
         output["quality"] = quality
         output.setdefault("finding_id", quality["finding_id"])
         enriched.append(output)
         status_counts[verification.status] = status_counts.get(verification.status, 0) + 1
         rejected_refs += verification.rejected_count
+        for gate_name, gate_value in quality.get("gates", {}).items():
+            if not isinstance(gate_value, dict):
+                continue
+            gate_status = str(gate_value.get("status", "") or "")
+            if gate_status:
+                gate_counts.setdefault(gate_name, {})[gate_status] = (
+                    gate_counts.setdefault(gate_name, {}).get(gate_status, 0) + 1
+                )
 
     return enriched, {
         "mode": mode,
@@ -137,6 +149,7 @@ def _attach_result_quality(
         "rejected_refs": rejected_refs,
         "downgraded_findings": downgraded_findings,
         "input_sha256": source_sha256,
+        "gate_status": gate_counts,
     }
 
 
@@ -323,10 +336,14 @@ async def _run_review(
             llm=llm,
             on_progress=_make_progress_cb(review_id),
         )
-        legacy_findings = findings
+        quality_input_findings = [dict(item) for item in findings]
+        legacy_findings = [
+            {key: value for key, value in item.items() if key != "quality_gates"}
+            for item in quality_input_findings
+        ]
         try:
             findings, quality_stats = _attach_result_quality(
-                findings=findings,
+                findings=quality_input_findings,
                 workbook=wb,
                 file_path=pinned_file_path,
                 attachments=attachments,

@@ -34,6 +34,29 @@ _logger = logging.getLogger("review.pipeline")
 _SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
 
 
+def _deterministic_crosscheck_mode() -> str:
+    mode = os.getenv("REVIEW_DETERMINISTIC_CROSSCHECK_MODE", "all_findings").strip().lower()
+    if mode not in {"all_findings", "p0_only", "off"}:
+        raise ValueError(
+            "REVIEW_DETERMINISTIC_CROSSCHECK_MODE must be all_findings, p0_only or off"
+        )
+    return mode
+
+
+def _gate(
+    status: str,
+    *,
+    reason: str = "",
+    issues: Optional[List[str]] = None,
+) -> dict[str, object]:
+    result: dict[str, object] = {"status": status}
+    if reason:
+        result["reason"] = reason
+    if issues is not None:
+        result["issues"] = list(issues)
+    return result
+
+
 def _emit_progress(on_progress, stage: str, current_sheet: str, findings, msg: str) -> None:
     """Best-effort progress report. Never raises — pipeline must not break on a bad callback."""
     if on_progress is None:
@@ -388,22 +411,82 @@ async def run_review(
     _emit_progress(on_progress, "findings_review", "", findings, "进入发现复核")
     review = await _llm_review_findings(wb, findings_sorted, llm, attachments=attachments)
 
-    # Cross-validation + adversarial challenge for P0 / needs_review findings
+    # Cross-validation + adversarial challenge. Deterministic validation is
+    # cheap and, by default, runs for every fail/unknown finding. The LLM
+    # challenger remains deliberately bounded to P0/explicit escalations.
+    deterministic_mode = _deterministic_crosscheck_mode()
     cross_issues: Dict[int, List[str]] = {}
     challenge: Dict[int, Optional[str]] = {}
+    cross_gates: Dict[int, dict[str, object]] = {}
+    challenge_gates: Dict[int, dict[str, object]] = {}
     _emit_progress(on_progress, "hallucination", "", findings_sorted, "进入交叉验证/对抗挑战")
     for idx, f in enumerate(findings_sorted, start=1):
-        if f.severity == "P0" or f.needs_review:
+        should_cross_check = (
+            f.severity == "P0"
+            or f.needs_review
+            or (deterministic_mode == "all_findings" and f.status in {"fail", "unknown"})
+            or (deterministic_mode == "p0_only" and f.status in {"fail", "unknown"})
+        )
+        if deterministic_mode == "off":
+            cross_gates[idx] = _gate(
+                "not_run", reason="deterministic cross-check disabled by configuration"
+            )
+        elif should_cross_check and (
+            deterministic_mode == "all_findings"
+            or f.severity == "P0"
+            or f.needs_review
+        ):
             try:
-                cross_issues[idx] = _cross_validate_finding(f, wb)
-            except Exception:
-                cross_issues[idx] = []
-            if f.severity == "P0":
-                ws = wb[f.sheet] if f.sheet in wb.sheetnames else None
-                ctx = _build_minimal_context(f, ws)
-                challenge[idx] = await _challenge_finding_with_llm(
-                    llm=llm, finding=f, minimal_context=ctx,
+                issues = _cross_validate_finding(f, wb)
+                cross_issues[idx] = issues
+                cross_gates[idx] = _gate(
+                    "flagged" if issues else "passed",
+                    issues=issues,
                 )
+            except Exception as exc:
+                cross_issues[idx] = []
+                cross_gates[idx] = _gate(
+                    "error", reason=f"{type(exc).__name__}: {exc}"
+                )
+        else:
+            cross_gates[idx] = _gate(
+                "not_run",
+                reason=(
+                    "p0_only policy excludes non-P0 finding"
+                    if deterministic_mode == "p0_only"
+                    else "finding status does not require deterministic cross-check"
+                ),
+            )
+
+        if f.severity == "P0":
+            ws = wb[f.sheet] if f.sheet in wb.sheetnames else None
+            ctx = _build_minimal_context(f, ws)
+            if not ctx:
+                challenge_gates[idx] = _gate(
+                    "not_run", reason="minimal context unavailable for challenger"
+                )
+            else:
+                try:
+                    challenge[idx] = await _challenge_finding_with_llm(
+                        llm=llm, finding=f, minimal_context=ctx,
+                    )
+                    verdict = challenge[idx]
+                    if verdict == "agree":
+                        challenge_gates[idx] = _gate("passed", reason="challenger agreed")
+                    elif verdict == "disagree":
+                        challenge_gates[idx] = _gate("flagged", reason="challenger disagreed")
+                    else:
+                        challenge_gates[idx] = _gate(
+                            "error", reason="challenger returned no verdict"
+                        )
+                except Exception as exc:
+                    challenge_gates[idx] = _gate(
+                        "error", reason=f"{type(exc).__name__}: {exc}"
+                    )
+        else:
+            challenge_gates[idx] = _gate(
+                "not_run", reason="adversarial challenger is limited to P0 findings"
+            )
 
     out: List[dict] = []
     for idx, f in enumerate(findings_sorted, start=1):
@@ -412,6 +495,35 @@ async def run_review(
             d.update(review[idx])
         d["cross_validate_issues"] = cross_issues.get(idx, [])
         d["challenge_verdict"] = challenge.get(idx)
+        review_result = review.get(idx)
+        if str(f.issue_type or "").startswith("LLM判定："):
+            model_gate = _gate(
+                "not_run",
+                reason="LLM-origin finding has no separate model verifier",
+            )
+        elif not isinstance(review_result, dict):
+            model_gate = _gate(
+                "not_run", reason="model re-review produced no result for this finding"
+            )
+        else:
+            reviewed_status = str(review_result.get("llm_status", "") or "")
+            model_gate = _gate(
+                "passed" if reviewed_status == f.status else "flagged",
+                reason=(
+                    "re-review agrees with the rule result"
+                    if reviewed_status == f.status
+                    else "re-review status differs from the rule result"
+                ),
+            )
+        d["quality_gates"] = {
+            "deterministic_cross_check": cross_gates.get(
+                idx, _gate("not_run", reason="no deterministic gate record")
+            ),
+            "model_re_review": model_gate,
+            "adversarial_challenge": challenge_gates.get(
+                idx, _gate("not_run", reason="no adversarial gate record")
+            ),
+        }
         out.append(d)
     # Lift only already-validated Agent attachment excerpts whose exact path
     # appears in the V1 basis. This makes the structured UI citation point to
@@ -427,6 +539,7 @@ async def run_review(
         "llm_call_stats": {k: dict(v) for k, v in LLM_CALL_STATS.items()},
         "evidence_agent": agent_stats,
         "warning": warning,
+        "quality_gates": _gate_counts(out),
     }
     return out, stats
 
@@ -436,4 +549,22 @@ def _counts_by(items: List[dict], key: str) -> Dict[str, int]:
     for it in items:
         k = str(it.get(key, "") or "")
         counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def _gate_counts(items: List[dict]) -> Dict[str, Dict[str, int]]:
+    counts: Dict[str, Dict[str, int]] = {}
+    for finding in items:
+        gates = finding.get("quality_gates") or {}
+        if not isinstance(gates, dict):
+            continue
+        for name, outcome in gates.items():
+            if not isinstance(outcome, dict):
+                continue
+            status = str(outcome.get("status", "") or "")
+            if not status:
+                continue
+            counts.setdefault(str(name), {})[status] = (
+                counts.setdefault(str(name), {}).get(status, 0) + 1
+            )
     return counts
