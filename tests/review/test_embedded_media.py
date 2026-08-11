@@ -55,7 +55,10 @@ def test_extract_pptx_media_returns_each_image(tmp_path):
     assert sorted(i.media_filename for i in items) == ["slide1.png", "slide2.jpg"]
 
 
-def test_extract_pdf_media_returns_each_image(tmp_path, monkeypatch):
+def test_extract_pdf_media_is_noop(tmp_path, monkeypatch):
+    """PDFs are handled by MinerU's full-document parser; embedded-image
+    extraction is intentionally a no-op to avoid polluting the index with raw
+    page bitmaps that duplicate what OCR already captures."""
     pdf = tmp_path / "doc.pdf"
     from review import embedded_media
 
@@ -72,9 +75,4 @@ def test_extract_pdf_media_returns_each_image(tmp_path, monkeypatch):
 
     monkeypatch.setattr(embedded_media, "_PdfReader", _FakeReader, raising=False)
     items = embedded_media.extract_pdf_media(pdf)
-    assert len(items) == 2
-    assert {i.file_type for i in items} == {"png", "jpeg"}
-    assert [i.media_index for i in items] == [1, 2]
-    assert [i.media_filename for i in items] == ["page1_img1.png", "page1_img2.jpeg"]
-    assert all(i.source_rel_path == "doc.pdf" for i in items)
-    assert all(i.bytes for i in items)
+    assert items == []

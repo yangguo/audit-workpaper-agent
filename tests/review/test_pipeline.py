@@ -169,6 +169,34 @@ def test_backfill_uses_llm_evidence_refs_excerpt():
     assert ".embedded_media/sap应用系统密码策略.docx::image1.png" in atts
 
 
+def test_backfill_lifts_ocr_excerpt_into_evidence_refs():
+    """Cached OCR text should populate evidence_refs[].excerpt so the UI shows real content."""
+    attachments = {
+        "items": [
+            {"rel_path": ".embedded_media/sap应用系统密码策略.docx::image1.png", "status": "binary", "file_type": "png"},
+        ],
+        "ocr_by_path": {
+            ".embedded_media/sap应用系统密码策略.docx::image1.png": {
+                "status": "ok",
+                "provider": "mineru-precise",
+                "content": "<table><tr><td>min_password_lng</td><td>6</td></tr>"
+                           "<tr><td>min_password_specials</td><td>0</td></tr></table>",
+            },
+        },
+    }
+    finding = {
+        "sheet": "SA-10",
+        "basis": "未发现《sap应用系统密码策略》截图中的参数设置",
+        "snippet": "",
+        "evidence_refs": [],
+    }
+    out = _backfill_embedded_evidence_refs([finding], attachments)
+    ref = out[0]["evidence_refs"][0]
+    assert ref["attachment"] == ".embedded_media/sap应用系统密码策略.docx::image1.png"
+    assert ref["excerpt"]
+    assert "min_password_lng" in ref["excerpt"]
+
+
 class _FakeRunnable:
     def __init__(self, content):
         self.content = content
