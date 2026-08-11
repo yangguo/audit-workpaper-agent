@@ -73,6 +73,21 @@ bash scripts/local_run.sh -m flow
 
 工具返回值同时提供 `artifact_url`，便于 CLI 或其他客户端读取同一份受限视图。
 
+## 审阅结果质量评估
+
+`evaluation_sets/review-quality/` 保存质量评估 schema 和合成样例；客户底稿、OCR
+全文和绝对路径必须留在批准的受控存储中。评估器只消费按 `case_id` 分组的 findings
+JSON，不读取工作簿，也不调用 LLM：
+
+```bash
+uv run python scripts/evaluate_review_quality.py \
+  --manifest /path/to/manifest.json \
+  --results /path/to/results-by-case.json
+```
+
+缺少人工裁决或任一质量门禁失败时，命令返回非零状态；`promotion_ready=true` 只是
+允许进入 V1/V2 对照审阅，不代表可以自动切换 V2。
+
 # Docker 部署（后端）
 
 ## 构建镜像

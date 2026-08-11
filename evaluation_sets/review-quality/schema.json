@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review quality manifest",
+  "type": "object",
+  "required": ["schema_version", "cases"],
+  "properties": {
+    "schema_version": {"const": "review-quality/1"},
+    "cases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/case"}
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "required": ["case_id", "input_sha256", "adjudication_status", "expected_findings"],
+      "properties": {
+        "case_id": {"type": "string", "minLength": 1},
+        "input_sha256": {"type": "string", "minLength": 1},
+        "adjudication_status": {"enum": ["pending", "adjudicated"]},
+        "expected_findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["match_key", "status", "severity", "evidence_ids"],
+            "properties": {
+              "match_key": {"type": "object", "minProperties": 1},
+              "status": {"enum": ["pass", "fail", "unknown"]},
+              "severity": {"enum": ["P0", "P1", "P2"]},
+              "evidence_ids": {"type": "array", "items": {"type": "string"}},
+              "primary_location": {"type": ["object", "null"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}
