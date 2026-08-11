@@ -83,6 +83,12 @@ FRONTEND_EXCLUDES = {
 }
 
 
+_IGNORE_DIR_NAMES = {
+    "__pycache__", "node_modules", ".pytest_cache", ".vite", "logs",
+    ".mypy_cache", ".ruff_cache",
+}
+
+
 def _copytree(src: Path, dst: Path, exclude_names: set[str]) -> None:
     """Copy a directory tree, skipping excluded top-level entries."""
     dst.mkdir(parents=True, exist_ok=True)
@@ -93,7 +99,7 @@ def _copytree(src: Path, dst: Path, exclude_names: set[str]) -> None:
         if child.is_dir():
             shutil.copytree(child, target, ignore=shutil.ignore_patterns(
                 "__pycache__", "*.pyc", ".pytest_cache", "node_modules",
-                ".next/cache",
+                ".next/cache", "cache",  # exclude .next/cache from .next copy
             ))
         else:
             shutil.copy2(child, target)
@@ -118,8 +124,12 @@ def _copy_files(srcs: list[str], dst_root: Path, exclude_names: set[str]) -> Non
         if src.is_dir():
             shutil.copytree(
                 src, dst,
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "node_modules",
-                                                ".next/cache", ".pytest_cache"),
+                ignore=shutil.ignore_patterns(
+                    "__pycache__", "*.pyc", "node_modules",
+                    ".next/cache", "cache",  # exclude .next/cache
+                    ".pytest_cache", ".vite", "*.log", "logs",
+                    ".mypy_cache", ".ruff_cache",
+                ),
             )
         else:
             shutil.copy2(src, dst)
