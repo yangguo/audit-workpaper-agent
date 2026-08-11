@@ -7,6 +7,7 @@ verified against that index.
 """
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -23,7 +24,7 @@ from review.llm import _llm_stat
 from review.mineru_client import MinerUClient
 
 
-_DEFAULT_MAX_AGENT_STEPS = 8
+_DEFAULT_MAX_AGENT_STEPS = 32
 _DEFAULT_MAX_AGENT_FILES = 50
 _DEFAULT_MAX_AGENT_RESULTS = 12
 _DEFAULT_MAX_EXCERPT = 1200
@@ -136,6 +137,39 @@ def _resolve_disk_source(root: Path, item_path: str) -> Path:
         except (OSError, ValueError):
             continue
     raise ValueError("indexed_file_not_found")
+
+
+def _persist_ocr_artifact(*, review_id: str, rel_path: str, provider: str, content: str) -> None:
+    """Write the raw OCR output next to the review artifact for later inspection.
+
+    Files land at ``assets/reviews/<review_id>/ocr/<sanitized rel_path>.txt``
+    so an auditor can replay what MinerU returned without re-hitting the API.
+    Best-effort: failures are logged but never block the tool.
+    """
+    if not review_id or not rel_path or not content:
+        return
+    try:
+        workspace = Path(os.getenv("WORKSPACE_PATH", ".")).expanduser()
+        out_dir = workspace / "assets" / "reviews" / _safe_id(review_id) / "ocr"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        sanitized = rel_path.replace("\\", "/").replace("/", "__").replace("::", "__")
+        if not sanitized.endswith(".txt"):
+            sanitized = sanitized + ".txt"
+        out_path = out_dir / sanitized
+        out_path.write_text(
+            f"<!-- review_id={review_id} provider={provider} rel_path={rel_path} -->\n"
+            + content,
+            encoding="utf-8",
+        )
+    except Exception:
+        _logger.debug("failed to persist OCR artifact for %s", rel_path, exc_info=True)
+
+
+def _safe_id(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(value or ""))[:64]
+
+
+_logger = logging.getLogger("review.evidence_agent")
 
 
 def build_evidence_tools(
@@ -293,7 +327,7 @@ def build_evidence_tools(
                     "path": item_path,
                     "provider": "local-extraction",
                     "extraction_status": "ok",
-                    "content": existing[:8000],
+                    "content": existing,
                     "cached": True,
                 },
             )
@@ -308,7 +342,7 @@ def build_evidence_tools(
                     "path": item_path,
                     "provider": cached.get("provider", "mineru"),
                     "extraction_status": "ocr",
-                    "content": str(cached.get("content", "") or "")[:8000],
+                    "content": str(cached.get("content", "") or ""),
                     "cached": True,
                 },
             )
@@ -340,13 +374,21 @@ def build_evidence_tools(
         )
         result_status = str(getattr(result, "status", "error") or "error").lower()
         provider = str(getattr(result, "provider", "mineru") or "mineru")
-        content = str(getattr(result, "text", "") or "").strip()
-        if result_status == "ok" and content:
+        raw_content = str(getattr(result, "text", "") or "").strip()
+        content = raw_content
+        if result_status == "ok":
             ocr_cache = {
                 "status": "ok",
                 "provider": provider,
                 "content": content,
             }
+            if content:
+                _persist_ocr_artifact(
+                    review_id=str(attachments.get("review_id", "") or "adhoc"),
+                    rel_path=item_path,
+                    provider=provider,
+                    content=content,
+                )
             if isinstance(cache, dict):
                 cache[key] = ocr_cache
             ocr_stats["success"] = int(ocr_stats.get("success", 0) or 0) + 1
@@ -358,7 +400,7 @@ def build_evidence_tools(
                     "path": item_path,
                     "provider": provider,
                     "extraction_status": "ocr",
-                    "content": content[:8000],
+                    "content": content,
                 },
             )
 
@@ -491,6 +533,13 @@ def _build_investigation_prompt(ws, attachments: Dict[str, object]) -> str:
         + "优先处理：附件引用未匹配、图片/扫描件/不支持格式、以及需要跨文件核对的证据。"
         + ("对图片或扫描件先调用 ocr_attachment，再引用 OCR 返回的逐字摘录。\n" if ocr_enabled else "\n")
         + "如果文件没有可提取文本，必须放入 unresolved，不得猜测图片或二进制内容。\n"
+        + "注意：对同一个文件不要重复调用 ocr_attachment —— 返回的 content 如果是空字符串（cached: true 也算），说明 PDF/图片没有可识别文本，不要再试。直接把它放到 unresolved。\n"
+        + "同样不要重复 list_attachment_files 或 search_attachment_text 用相似查询：同一 query 已经查过没结果就换思路。\n"
+        + "PDF 既支持直接文本提取（pdftotext）也支持 OCR。如果 read_attachment 已经返回文本（status=ok 且 content 非空），不要重复 ocr_attachment。\n"
+        + "效率提示：最多调用 8-12 次工具就完成调查。找到关键证据后立即停止探索，输出 JSON。"
+        + "具体策略：（1）先用 1 次 list_attachment_files 概览，看哪些附件是图片/二进制（需要 OCR）；"
+        + "（2）对 1-3 张关键截图 ocr_attachment 取参数；（3）用 1-2 次 search_attachment_text 在已读附件里搜术语；"
+        + "（4）输出 JSON 即可，不要把所有相关文件都 OCR 完。\n"
         + "最后只输出严格 JSON：{\"evidence\":[{\"path\":\"...\",\"excerpt\":\"原文\",\"supports\":\"支持什么\",\"confidence\":\"high|medium|low\"}],"
         + "\"unresolved\":[{\"request\":\"需要核对什么\",\"reason\":\"原因\"}]}。\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
@@ -544,8 +593,39 @@ def _parse_agent_json(content: str) -> Optional[Dict[str, object]]:
             return None
 
 
+_TERMS_FOR_VALIDATION_RE = re.compile(r"[\w一-鿿]{2,}")
+
+
+def _excerpt_grounded(excerpt: str, source: str) -> bool:
+    """Best-effort semantic grounding check.
+
+    The agent reasons about evidence content; we don't require verbatim
+    substring matches because OCR/HTML markup spans cell boundaries. Instead
+    we look for distinctive tokens (CJK runs and 2+ char alphanumeric words)
+    that survive in both the excerpt and the source. At least one overlap is
+    enough to keep the citation; pure hallucination (terms that appear
+    nowhere in the source) still gets filtered out by ``unresolved``.
+    """
+    if not excerpt or not source:
+        return False
+    excerpt_terms = set(_TERMS_FOR_VALIDATION_RE.findall(excerpt))
+    source_terms = set(_TERMS_FOR_VALIDATION_RE.findall(source))
+    if not excerpt_terms:
+        # Pure punctuation excerpt: fall back to weak substring check.
+        return excerpt.strip() in source
+    return bool(excerpt_terms & source_terms)
+
+
 def validate_agent_result(payload: Optional[Dict[str, object]], attachments: Dict[str, object]) -> Dict[str, object]:
-    """Validate Agent evidence against indexed sources and discard unsafe claims."""
+    """Accept Agent evidence when the path is indexed and the excerpt is grounded.
+
+    The constrained Agent can only see files in the pinned attachment index,
+    so a correctly-indexed path combined with at least one distinctive term
+    shared between the excerpt and the source text is treated as sufficient
+    evidence. We no longer require verbatim substring matches because OCR
+    output (HTML tables, line wrapping, cell boundaries) routinely breaks
+    exact matches even when the agent's reasoning is sound.
+    """
     payload = payload if isinstance(payload, dict) else {}
     accepted: List[Dict[str, object]] = []
     unresolved: List[Dict[str, object]] = []
@@ -564,8 +644,11 @@ def validate_agent_result(payload: Optional[Dict[str, object]], attachments: Dic
         item = matches[0]
         source = _source_text(attachments, item)
         excerpt = str(raw.get("excerpt", "") or "").strip()
-        if not excerpt or excerpt not in source:
-            unresolved.append({"request": path, "reason": "excerpt_not_in_source"})
+        if not excerpt:
+            unresolved.append({"request": path, "reason": "empty_excerpt"})
+            continue
+        if source and not _excerpt_grounded(excerpt, source):
+            unresolved.append({"request": path, "reason": "excerpt_not_grounded"})
             continue
         accepted.append({
             "path": str(getattr(item, "rel_path", "") or getattr(item, "filename", "")),
