@@ -23,9 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
-import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -58,7 +56,8 @@ BACKEND_EXCLUDES = {
 }
 
 FRONTEND_INCLUDES = [
-    "frontend/.next",
+    # Source code only — server runs `npm ci && npm run build` itself.
+    # Excludes node_modules (reinstalled) and .next/ (rebuilt on server).
     "frontend/app",
     "frontend/components",
     "frontend/hooks",
@@ -156,25 +155,13 @@ def build_backend(output_dir: Path) -> Path:
 
 
 def build_frontend(output_dir: Path) -> Path:
-    frontend_src = ROOT / "frontend"
-    if not (frontend_src / ".next").exists():
-        print("\n=== Building Next.js production bundle ===")
-        env = os.environ.copy()
-        env.setdefault("NODE_ENV", "production")
-        result = subprocess.run(
-            ["npm", "run", "build"], cwd=str(frontend_src), env=env, check=False
-        )
-        if result.returncode != 0:
-            sys.exit(f"frontend build failed (exit={result.returncode})")
-    else:
-        print("\n=== Skipping npm build (frontend/.next already exists) ===")
-
+    """Copy frontend source (no build). Server runs npm ci && npm run build."""
     frontend_dir = output_dir / "frontend"
     if frontend_dir.exists():
         shutil.rmtree(frontend_dir)
     frontend_dir.mkdir(parents=True)
 
-    print("\n=== Frontend files ===")
+    print("\n=== Frontend source files (no .next, server builds) ===")
     _copy_files(FRONTEND_INCLUDES, frontend_dir, FRONTEND_EXCLUDES)
 
     for child in list(frontend_dir.iterdir()):
