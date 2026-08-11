@@ -78,6 +78,7 @@ class RemediationState(BaseModel):
     status: Literal["actionable", "needs_human_refinement", "not_available"] = (
         "not_available"
     )
+    action: str = ""
     required_evidence: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)

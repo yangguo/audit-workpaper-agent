@@ -145,6 +145,13 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
         "invalid",
         "not_available",
     }
+    assert "grouping" in finding["quality"]
+    assert finding["quality"]["remediation"]["status"] in {
+        "actionable",
+        "needs_human_refinement",
+        "not_available",
+    }
+    assert payload["stats"]["quality"]["raw_findings"] == len(payload["findings"])
     assert finding["issue_type"] == "特权账号识别范围可能不完整"
 
 

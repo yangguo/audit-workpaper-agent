@@ -30,6 +30,7 @@ from review.planner import build_review_plan
 from review.policy import load_policy_pack
 from review.pipeline import run_review
 from review.result_quality import build_quality_envelope
+from review.remediation import enrich_finding_quality
 from storage.findings_store import load_findings, save_findings
 from storage.review_artifact_store import ReviewArtifactStore
 
@@ -348,6 +349,12 @@ async def _run_review(
                 file_path=pinned_file_path,
                 attachments=attachments,
             )
+            if quality_stats.get("mode") != "off":
+                findings, grouping_stats = enrich_finding_quality(
+                    findings,
+                    input_sha256=str(quality_stats.get("input_sha256", "") or ""),
+                )
+                quality_stats.update(grouping_stats)
         except Exception as exc:
             # Quality metadata is additive. A malformed/temporarily
             # unavailable provenance index must not turn a completed V1 review
