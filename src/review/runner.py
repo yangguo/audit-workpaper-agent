@@ -461,6 +461,19 @@ async def _capture_shadow_artifact(
             error = f"{type(e).__name__}: {e}"
             _logger.exception("stage c shadow capture %s failed", review_id)
 
+        store = ReviewArtifactStore(workspace_path=workspace_path)
+        if error is None:
+            try:
+                await asyncio.to_thread(store.complete, review_id)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                _logger.exception("shadow artifact completion %s failed", review_id)
+        if error is not None:
+            try:
+                await asyncio.to_thread(store.fail, review_id, error)
+            except Exception:
+                _logger.exception("shadow artifact failure record %s failed", review_id)
+
     entry = _REGISTRY.get(review_id)
     if entry is None:
         return
@@ -645,7 +658,6 @@ def _write_shadow_artifact(
             store.write_review_plan(review_id, plan.to_dict())
             policy_findings = execute_policy_plan(plan, policy_pack)
             store.write_policy_findings(review_id, policy_findings)
-        store.complete(review_id)
         return None
     except Exception as e:
         error = f"{type(e).__name__}: {e}"

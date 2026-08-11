@@ -108,6 +108,24 @@ def test_build_artifact_view_marks_stage_c_disabled_when_not_configured():
     assert payload["stages"]["stage_c"] == {"status": "disabled", "findings": []}
 
 
+def test_build_artifact_view_keeps_completed_stage_b_visible_when_stage_c_fails():
+    manifest = _manifest()
+    manifest["artifact_status"] = "error"
+    manifest["artifact_error"] = "RuntimeError: stage c boom"
+
+    payload = build_artifact_view(
+        review_id="rid-stage-c-error",
+        manifest=manifest,
+        evidence={"sheets": []},
+        plan={"scope": {}, "items": [], "skipped": []},
+        policy_findings={"stats": {}, "findings": []},
+    )
+
+    assert payload["stages"]["stage_a"]["status"] == "completed"
+    assert payload["stages"]["stage_b"]["status"] == "completed"
+    assert payload["stages"]["stage_c"]["status"] == "error"
+
+
 def test_build_artifact_view_exposes_bounded_v1_shadow_comparison():
     payload = build_artifact_view(
         review_id="rid-compare",

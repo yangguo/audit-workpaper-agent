@@ -95,4 +95,3 @@ def test_build_remediation_returns_actionable_structured_result():
     assert remediation["action"]
     assert remediation["required_evidence"] == ["权限清单、复核记录"]
     assert remediation["acceptance_criteria"] == ["抽样记录与完整范围一致"]
-

@@ -209,10 +209,10 @@ def _stage_b_view(
     pack = _pack_ref(policy_pack)
     if pack is None:
         return {"status": "disabled", "findings": []}
-    if artifact_status == "error":
-        status = "error"
-    elif isinstance(findings, dict) and isinstance(plan, dict):
+    if isinstance(findings, dict) and isinstance(plan, dict):
         status = "completed"
+    elif artifact_status == "error":
+        status = "error"
     else:
         status = "running"
 

@@ -139,6 +139,8 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
     assert finding["quality"]["schema_version"] == "review-quality/1"
     assert finding["quality"]["provenance"]["input_sha256"]
     assert finding["quality"]["finding_id"].startswith("legacy:")
+    assert finding["origin"] == "sheet_scope"
+    assert finding["rule_hint"] == "privileged_account_scope"
     assert finding["quality"]["citation_validation"]["status"] in {
         "verified",
         "partial",
@@ -146,6 +148,7 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
         "not_available",
     }
     assert "grouping" in finding["quality"]
+    assert finding["quality"]["grouping"]["root_cause_id"]
     assert finding["quality"]["remediation"]["status"] in {
         "actionable",
         "needs_human_refinement",
@@ -251,6 +254,10 @@ async def test_stage_c_failure_does_not_fail_completed_v1_review(monkeypatch, tm
     assert status["status"] == "completed"
     assert status["artifact_status"] == "error"
     assert "RuntimeError: stage c boom" in status["artifact_error"]
+    manifest = ReviewArtifactStore().load_manifest(review_id)
+    assert manifest is not None
+    assert manifest["artifact_status"] == "error"
+    assert "RuntimeError: stage c boom" in manifest["artifact_error"]
     assert load_findings(review_id) == v1_payload
 
 

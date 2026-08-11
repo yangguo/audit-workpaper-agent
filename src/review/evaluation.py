@@ -61,6 +61,16 @@ def _evidence_ids_from_v2(finding: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def _input_sha256_from_quality(finding: Mapping[str, Any]) -> str:
+    quality = finding.get("quality")
+    provenance = quality.get("provenance") if isinstance(quality, Mapping) else None
+    return (
+        str(provenance.get("input_sha256", "") or "").strip()
+        if isinstance(provenance, Mapping)
+        else ""
+    )
+
+
 def _primary_location_matches(
     expected: Mapping[str, Any], actual: Mapping[str, Any]
 ) -> bool:
@@ -201,6 +211,22 @@ def evaluate_quality_cases(
         expected_total += len(expected)
         actual_total += len(actual)
 
+        expected_input_sha256 = str(raw_case.get("input_sha256", "") or "").strip()
+        if not expected_input_sha256:
+            failures.append({"code": "missing_input_sha256", "case_id": case_id})
+        for actual_finding in actual:
+            actual_input_sha256 = _input_sha256_from_quality(actual_finding)
+            if actual_input_sha256 != expected_input_sha256:
+                failures.append(
+                    {
+                        "code": "input_sha256_mismatch",
+                        "case_id": case_id,
+                        "finding_id": str(actual_finding.get("finding_id", "") or ""),
+                        "expected": expected_input_sha256,
+                        "actual": actual_input_sha256,
+                    }
+                )
+
         if str(raw_case.get("adjudication_status", "") or "") != "adjudicated":
             failures.append({"code": "missing_adjudication", "case_id": case_id})
 
@@ -240,6 +266,30 @@ def evaluate_quality_cases(
 
         matched_total += len(matched_pairs)
         for expected_finding, actual_finding in matched_pairs:
+            expected_status = str(expected_finding.get("status", "") or "")
+            actual_status = str(actual_finding.get("status", "") or "")
+            if actual_status != expected_status:
+                failures.append(
+                    {
+                        "code": "status_mismatch",
+                        "case_id": case_id,
+                        "match_key": dict(expected_finding.get("match_key") or {}),
+                        "expected": expected_status,
+                        "actual": actual_status,
+                    }
+                )
+            expected_severity = str(expected_finding.get("severity", "") or "")
+            actual_severity = str(actual_finding.get("severity", "") or "")
+            if actual_severity != expected_severity:
+                failures.append(
+                    {
+                        "code": "severity_mismatch",
+                        "case_id": case_id,
+                        "match_key": dict(expected_finding.get("match_key") or {}),
+                        "expected": expected_severity,
+                        "actual": actual_severity,
+                    }
+                )
             expected_ids = {
                 str(item).strip()
                 for item in _as_list(expected_finding.get("evidence_ids"))

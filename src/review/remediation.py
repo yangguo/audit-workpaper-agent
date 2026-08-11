@@ -233,4 +233,3 @@ def enrich_finding_quality(
         quality["remediation"] = build_remediation(row)
         row["quality"] = quality
     return rows, grouping_stats(rows)
-

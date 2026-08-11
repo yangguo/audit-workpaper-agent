@@ -286,6 +286,87 @@ def test_evaluation_fails_when_v2_p0_p1_precision_decreases():
     )
 
 
+def test_evaluation_fails_when_matched_finding_status_or_severity_differs():
+    manifest = _manifest()
+    manifest["cases"][0]["expected_findings"] = [
+        manifest["cases"][0]["expected_findings"][0]
+    ]
+    actual = {
+        "case-1": [
+            {
+                "issue_type": "覆盖性",
+                "sheet": "SA-1",
+                "cell": "C5",
+                "status": "unknown",
+                "severity": "P2",
+                "quality": {
+                    "primary_location": {
+                        "source_kind": "cell",
+                        "sheet": "SA-1",
+                        "cell_or_range": "C5",
+                    },
+                    "citation_validation": {
+                        "status": "verified",
+                        "evidence_ids": ["cell:1"],
+                    },
+                    "gates": {
+                        "deterministic_cross_check": {"status": "passed"},
+                    },
+                },
+            }
+        ]
+    }
+
+    result = evaluate_quality_cases(manifest, actual)
+
+    assert result["promotion_ready"] is False
+    assert {failure["code"] for failure in result["failures"]} >= {
+        "status_mismatch",
+        "severity_mismatch",
+    }
+
+
+def test_evaluation_fails_when_results_are_not_from_the_case_input_snapshot():
+    manifest = _manifest()
+    manifest["cases"][0]["expected_findings"] = [
+        manifest["cases"][0]["expected_findings"][0]
+    ]
+    actual = {
+        "case-1": [
+            {
+                "issue_type": "覆盖性",
+                "sheet": "SA-1",
+                "cell": "C5",
+                "status": "fail",
+                "severity": "P1",
+                "quality": {
+                    "primary_location": {
+                        "source_kind": "cell",
+                        "sheet": "SA-1",
+                        "cell_or_range": "C5",
+                    },
+                    "citation_validation": {
+                        "status": "verified",
+                        "evidence_ids": ["cell:1"],
+                    },
+                    "gates": {
+                        "deterministic_cross_check": {"status": "passed"},
+                    },
+                    "provenance": {"input_sha256": "wrong-source-sha"},
+                },
+            }
+        ]
+    }
+
+    result = evaluate_quality_cases(manifest, actual)
+
+    assert result["promotion_ready"] is False
+    assert any(
+        failure["code"] == "input_sha256_mismatch"
+        for failure in result["failures"]
+    )
+
+
 def test_evaluation_fails_when_fail_finding_has_no_quality_envelope():
     manifest = _manifest()
     result = evaluate_quality_cases(

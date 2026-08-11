@@ -19,10 +19,11 @@ uv run python scripts/evaluate_review_quality.py \
 ```
 
 The command returns exit code 2 when adjudication is missing or a quality gate
-fails. The evaluator fails closed when citation reproduction is below 100%, a
-gate encodes `not_run` as `passed`, or the supplied V2 results reduce P0/P1
-precision relative to V1. A result of `promotion_ready=true` is necessary but
-not sufficient for promoting Stage C: the release owner must also review the
+fails. The evaluator fails closed when a finding's provenance input SHA256
+differs from its case, citation reproduction is below 100%, a gate encodes
+`not_run` as `passed`, or the supplied V2 results reduce P0/P1 precision
+relative to V1. A result of `promotion_ready=true` is necessary but not
+sufficient for promoting Stage C: the release owner must also review the
 paired V1/V2 report.
 
 For an explicit V1/V2 comparison, the results file may use this shape (the

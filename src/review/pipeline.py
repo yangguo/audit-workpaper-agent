@@ -33,6 +33,76 @@ _logger = logging.getLogger("review.pipeline")
 
 _SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
 
+# This is an allow-list of deterministic rules, not an inference from a
+# finding's free text. Findings outside the list (including LLM-generated
+# findings) remain explicitly unclustered by leaving ``rule_hint`` empty.
+_STATIC_FINDING_TAXONOMY: dict[str, tuple[str, str]] = {
+    "执行列疑似未替换模板/未按要求填列": (
+        "procedure_pairs", "execution_column_template",
+    ),
+    "程序执行不到位/仅依赖访谈": (
+        "procedure_pairs", "interview_only_execution",
+    ),
+    "证据类型缺失": ("procedure_pairs", "required_evidence_missing"),
+    "账号新增样本总量基准可能有误": (
+        "procedure_pairs", "account_creation_population",
+    ),
+    "离职账号禁用检查方法可能有误": (
+        "procedure_pairs", "terminated_account_disable_method",
+    ),
+    "未覆盖调岗权限变更/禁用测试": (
+        "procedure_pairs", "transfer_access_change_coverage",
+    ),
+    "设计有效性证据不足（密码策略）": (
+        "procedure_pairs", "password_policy_design_evidence",
+    ),
+    "密码策略证据有效性不足": (
+        "procedure_pairs", "password_policy_effectiveness_evidence",
+    ),
+    "批处理作业证据不足/范围可能未覆盖": (
+        "procedure_pairs", "batch_job_evidence_scope",
+    ),
+    "系统变更证据不足/样本框定可能有误": (
+        "procedure_pairs", "change_population_evidence",
+    ),
+    "特权账号识别范围可能不完整": (
+        "sheet_scope", "privileged_account_scope",
+    ),
+    "供应商托管场景证据可能不足": (
+        "sheet_scope", "vendor_hosting_evidence",
+    ),
+    "附件证据引用未匹配到附件目录": (
+        "attachment_reference", "attachment_reference_missing",
+    ),
+    "附件证据内容未解析": (
+        "attachment_reference", "attachment_text_unavailable",
+    ),
+    "附件证据编号/文件未匹配（可能引用错误）": (
+        "evidence_steps", "attachment_reference_mismatch",
+    ),
+    "证据-步骤一致性抽样复核（为控制LLM调用规模）": (
+        "evidence_steps", "sampling_limited",
+    ),
+    "A-C对应性：LLM调用失败（需人工复核）": ("procedure_pair_llm", ""),
+    "A-C对应性：LLM无法判定（需人工确认）": ("procedure_pair_llm", ""),
+}
+
+
+def _apply_static_finding_taxonomy(finding: dict) -> dict:
+    """Attach controlled rule metadata to deterministic V1 findings only."""
+    origin = str(finding.get("origin", "") or "").strip()
+    rule_hint = str(finding.get("rule_hint", "") or "").strip()
+    if rule_hint or origin not in {"", "legacy"}:
+        return finding
+    issue_type = str(finding.get("issue_type", "") or "").strip()
+    if issue_type.startswith("LLM判定："):
+        finding["origin"] = "llm"
+        return finding
+    taxonomy = _STATIC_FINDING_TAXONOMY.get(issue_type)
+    if taxonomy is not None:
+        finding["origin"], finding["rule_hint"] = taxonomy
+    return finding
+
 
 def _deterministic_crosscheck_mode() -> str:
     mode = os.getenv("REVIEW_DETERMINISTIC_CROSSCHECK_MODE", "all_findings").strip().lower()
@@ -100,6 +170,7 @@ def _parse_sheet_filter(raw: Optional[str]) -> Optional[List[str]]:
 
 def _finding_to_dict(f: Finding) -> dict:
     d = dataclasses.asdict(f)
+    _apply_static_finding_taxonomy(d)
     for k, default in (("evidence_refs", []), ("reasons", []), ("fix_suggestion_detail", {})):
         v = d.get(k)
         if isinstance(v, str) and v.strip():

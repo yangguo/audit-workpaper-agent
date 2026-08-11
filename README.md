@@ -212,9 +212,10 @@ uv run python scripts/evaluate_review_quality.py \
 缺少人工裁决或任一质量门禁失败时，命令返回非零状态；`promotion_ready=true` 只是
 允许进入 V1/V2 对照审阅，不代表可以自动切换 V2。
 
-发布门禁固定要求：gold set 的引用复现率为 100%，没有人工裁决的 case 不能推广，
-`not_run` 不能编码成 `passed`，且提供 V2 结果时 P0/P1 精确率不得低于 V1。回滚时
-将 `REVIEW_RESULT_QUALITY_MODE` 切回 `off`、保持导出 `source=legacy`，并保留
+发布门禁固定要求：每个 finding 的 `quality.provenance.input_sha256` 必须与 gold-set
+case 一致，引用复现率为 100%，没有人工裁决的 case 不能推广，`not_run` 不能编码成
+`passed`，且提供 V2 结果时 P0/P1 精确率不得低于 V1。回滚时将
+`REVIEW_RESULT_QUALITY_MODE` 切回 `off`、保持导出 `source=legacy`，并保留
 `assets/reviews/<review_id>/` 中的冻结 artifact 供排查。
 
 # Docker 部署（后端）

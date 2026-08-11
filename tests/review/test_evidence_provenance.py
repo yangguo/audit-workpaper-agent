@@ -153,4 +153,3 @@ def test_fail_without_verified_evidence_is_downgraded_to_unknown():
     assert updated["severity"] == "P2"
     assert "无法引用原始证据" in updated["unknown_reason"]
     assert updated["evidence_refs"] == []
-
