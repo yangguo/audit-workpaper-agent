@@ -186,6 +186,7 @@ async def _upload_attachment_directory(
             if target_path.exists():
                 raise HTTPException(status_code=400, detail=f"Duplicate attachment path: {relative.as_posix()}")
 
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = directory / f".tmp-{uuid.uuid4().hex}"
             temp_path, digest, size = await _stream_to_temp_and_hash(upload, temp_path)
             total_size += size
