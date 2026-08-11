@@ -193,13 +193,18 @@ def _backfill_embedded_evidence_refs(findings_dicts, attachments=None):
     are lifted as-is; `《...》` document references are resolved to embedded
     media via token overlap.
 
+    For embedded-media paths we also lift a short excerpt from the cached OCR
+    text so the UI's evidence panel can render what was actually read, even
+    when the agent's structured citation was rejected by validation.
+
     Cheap post-process; doesn't change the LLM's findings text, only fills
-    the structural `evidence_refs[].attachment` field so the UI can render
-    what was actually inspected.
+    the structural `evidence_refs` fields so the UI can render what was
+    actually inspected.
     """
     if not findings_dicts:
         return findings_dicts
     doc_to_media = _build_doc_to_media_map(attachments)
+    ocr_cache = (attachments or {}).get("ocr_by_path") or {}
 
     def _text_sources(fnd):
         for key in ("basis", "snippet"):
@@ -220,33 +225,180 @@ def _backfill_embedded_evidence_refs(findings_dicts, attachments=None):
                         if v:
                             yield str(v)
 
+    def _ocr_excerpt(rel_path: str, fallback_text: str) -> str:
+        """Pick a brief excerpt from the OCR cache for an embedded-media path."""
+        candidates: List[str] = []
+        key = rel_path.lower()
+        cached = ocr_cache.get(key)
+        if isinstance(cached, dict) and str(cached.get("status", "")).lower() == "ok":
+            candidates.append(str(cached.get("content", "") or ""))
+        # The cache key uses "::" while the path uses "__" in some backends.
+        if "::" in key:
+            candidates.append(ocr_cache.get(key.replace("::", "__")) or "")
+        for raw in candidates:
+            if raw:
+                excerpt = _extract_excerpt(raw, fallback_text)
+                if excerpt:
+                    return excerpt
+        return ""
+
+    def _ocr_full_text(rel_path: str) -> str:
+        """Return the full OCR text for an embedded-media path, or empty string."""
+        candidates: List[str] = []
+        key = rel_path.lower()
+        cached = ocr_cache.get(key)
+        if isinstance(cached, dict) and str(cached.get("status", "")).lower() == "ok":
+            candidates.append(str(cached.get("content", "") or ""))
+        if "::" in key:
+            candidates.append(ocr_cache.get(key.replace("::", "__")) or "")
+        for raw in candidates:
+            if raw:
+                return raw
+        return ""
+
+    def _attachment_extracted_text(rel_path: str) -> str:
+        """Return the directly-extracted text for a real attachment from the index."""
+        if not attachments:
+            return ""
+        items = attachments.get("items") or []
+        target = str(rel_path or "").strip().lower().replace("\\", "/")
+        for item in items:
+            if not item:
+                continue
+            rel = str(getattr(item, "rel_path", "") or "").lower().replace("\\", "/")
+            if rel == target:
+                text = str(getattr(item, "extracted_text", "") or "").strip()
+                if text:
+                    return text
+        return ""
+
+    def _extract_excerpt(content: str, hint: str, limit: int = 240) -> str:
+        """Return a single-line excerpt around the hint, or the first line."""
+        text = re.sub(r"\s+", " ", str(content or "")).strip()
+        hint = str(hint or "").strip()
+        if hint:
+            position = text.find(hint)
+            if position < 0:
+                # Try a 12+ char substring of the hint to tolerate punctuation.
+                for size in (24, 16, 12):
+                    snippet = hint[:size]
+                    if not snippet:
+                        continue
+                    position = text.find(snippet)
+                    if position >= 0:
+                        break
+            if position >= 0:
+                start = max(0, position - 60)
+                end = min(len(text), position + limit - 60)
+                return text[start:end].strip()
+        return text[:limit].strip()
+
     for fnd in findings_dicts:
         refs = fnd.get("evidence_refs") or []
         existing = {str(r.get("attachment") or "") for r in refs}
-        new_paths = []
+        snippet_hint = str(fnd.get("snippet") or "")
+        new_paths: List[Tuple[str, str]] = []
         for text in _text_sources(fnd):
             for m in _EMBEDDED_RE.findall(text):
                 p = m.rstrip(".,;，。，")
-                if p and p not in existing and p not in new_paths:
-                    new_paths.append(p)
+                if p and p not in existing and not any(np[0] == p for np in new_paths):
+                    new_paths.append((p, text))
             for m in _REAL_ATTACH_RE.findall(text):
                 p = m.rstrip(".,;，。，")
-                if p and p not in existing and p not in new_paths:
-                    new_paths.append(p)
+                if p and p not in existing and not any(np[0] == p for np in new_paths):
+                    new_paths.append((p, text))
             for m in _DOC_REF_HINT_RE.finditer(text):
                 doc_name = m.group(1).strip()
                 if not doc_name or len(doc_name) < 2:
                     continue
                 for p in _resolve_doc_name_to_media(doc_name, doc_to_media):
-                    if p not in existing and p not in new_paths:
-                        new_paths.append(p)
-        for p in new_paths:
-            refs.append({
+                    if p not in existing and not any(np[0] == p for np in new_paths):
+                        new_paths.append((p, text))
+
+        # Topic-based association: even when a finding doesn't literally mention
+        # an embedded-media path or a 《doc》 reference, attach any screenshot
+        # whose source document name **contains a distinctive compound term**
+        # from the finding's text. We avoid bag-of-bigrams matching because
+        # generic terms like 「策略」 or 「系统」 would otherwise pull in
+        # unrelated docs (备份策略.docx, SAP系统周巡检报告.docx).
+        topic_text_parts: List[str] = []
+        for key in ("basis", "snippet", "issue_type", "risk_type"):
+            v = fnd.get(key)
+            if v:
+                topic_text_parts.append(str(v))
+        llm_reasons = fnd.get("llm_reasons")
+        if isinstance(llm_reasons, str) and llm_reasons.strip():
+            try:
+                parsed_reasons = json.loads(llm_reasons)
+                if isinstance(parsed_reasons, list):
+                    topic_text_parts.extend(str(r) for r in parsed_reasons)
+            except Exception:
+                pass
+        topic_text = " ".join(topic_text_parts)
+        # Extract distinctive compound keywords (3+ CJK chars) from the finding
+        # text. These are real terms like 「密码策略」 / 「操作系统」 / 「SAP数据库」
+        # — generic 2-char bigrams like 「策略」 / 「设置」 are deliberately
+        # excluded so unrelated docs aren't pulled in.
+        compound_keywords: set[str] = set()
+        if topic_text:
+            text = str(topic_text)
+            for size in (4, 3):
+                i = 0
+                while i + size <= len(text):
+                    chunk = text[i:i + size]
+                    if all("一" <= ch <= "鿿" for ch in chunk):
+                        compound_keywords.add(chunk)
+                    i += 1
+        if compound_keywords:
+            # Restrict to compound keywords that contain a topic-distinctive
+            # term. Generic 3-char chunks like 「配置及」「置截图」 appear in
+            # nearly every docx filename and would otherwise pull in unrelated
+            # docs (服务器的安装/防病毒/防火墙).
+            domain_terms = (
+                "密码", "口令", "验证", "身份", "鉴权", "授权",
+                "安全", "登录", "锁定", "失败", "会话",
+                "策略", "参数", "配置", "密码策", "登录失败",
+                "应用", "操作", "数据库", "系统", "OS",
+            )
+            specific_kws = {
+                kw for kw in compound_keywords
+                if any(term in kw for term in domain_terms)
+            }
+            for stem, paths in doc_to_media.items():
+                stem_lower = stem.lower()
+                hit = False
+                for kw in specific_kws:
+                    if kw in stem_lower or stem_lower in kw:
+                        hit = True
+                        break
+                if not hit:
+                    continue
+                for p in paths:
+                    if p in existing or any(np[0] == p for np in new_paths):
+                        continue
+                    new_paths.append((p, topic_text))
+        for p, source_text in new_paths:
+            excerpt = ""
+            full_text = ""
+            attachment_text = ""
+            if p.startswith(".embedded_media/"):
+                excerpt = _ocr_excerpt(p, source_text)
+                full_text = _ocr_full_text(p)
+            else:
+                attachment_text = _attachment_extracted_text(p)
+                if attachment_text:
+                    excerpt = _extract_excerpt(attachment_text, source_text, limit=240)
+            new_ref = {
                 "sheet": fnd.get("sheet"),
                 "cell_or_range": "",
                 "attachment": p,
-                "excerpt": "",
-            })
+                "excerpt": excerpt or snippet_hint[:240],
+            }
+            if full_text:
+                new_ref["full_text"] = full_text
+            if attachment_text:
+                new_ref["attachment_text"] = attachment_text
+            refs.append(new_ref)
         if new_paths:
             fnd["evidence_refs"] = refs
     return findings_dicts
@@ -404,9 +556,26 @@ async def run_review(
 
     findings_sorted = _sort_findings(findings)
 
+    # Lift attachment paths into evidence_refs[].attachment / full_text /
+    # attachment_text BEFORE the reviewer runs so it can see the actual OCR
+    # content for each finding rather than guessing from cell text alone.
+    pre_review_dicts: List[dict] = []
+    for fnd in findings_sorted:
+        d = _finding_to_dict(fnd)
+        pre_review_dicts.append(d)
+    _backfill_embedded_evidence_refs(pre_review_dicts, attachments)
+    # Mirror the backfilled refs onto the Finding objects so the reviewer (which
+    # consumes Finding instances, not dicts) sees the same content.
+    for fnd, d in zip(findings_sorted, pre_review_dicts):
+        refs = d.get("evidence_refs") or []
+        if refs:
+            object.__setattr__(
+                fnd, "evidence_refs", json.dumps(refs, ensure_ascii=False)
+            )
+
     # LLM re-review of rule-based (non-LLM-tagged) findings
     _emit_progress(on_progress, "findings_review", "", findings, "进入发现复核")
-    review = await _llm_review_findings(wb, findings_sorted, llm)
+    review = await _llm_review_findings(wb, findings_sorted, llm, attachments=attachments)
 
     # Cross-validation + adversarial challenge for P0 / needs_review findings
     cross_issues: Dict[int, List[str]] = {}
