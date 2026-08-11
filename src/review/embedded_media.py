@@ -110,47 +110,14 @@ except ImportError:  # pragma: no cover
 
 
 def extract_pdf_media(pdf_path: Path) -> List[ExtractedMedia]:
-    """Extract embedded images from a PDF. Uses pypdf if available; else returns [].
-
-    ``media_index`` is a 1-based contiguous index of emitted images (only
-    incremented when an image is appended), and ``media_filename`` embeds the
-    originating page number for traceback.
+    """PDFs use OCR (via MinerU) for image-only pages; embedded-image extraction
+    is intentionally a no-op so we don't pollute the attachment index with raw
+    page bitmaps that duplicate the same content the OCR full-text already
+    captured.
     """
-    if _PdfReader is None:
-        _logger.warning("pypdf not installed; skipping PDF embedded media")
-        return []
-    out: List[ExtractedMedia] = []
-    try:
-        reader = _PdfReader(str(pdf_path))
-        media_index = 0
-        for page_num, page in enumerate(reader.pages, start=1):
-            try:
-                page_images = list(page.images)
-            except Exception:
-                continue
-            for img in page_images:
-                # pypdf returns ImageFile objects with .data/.ext, but for
-                # extensibility also accept plain (data, ext) tuples.
-                if isinstance(img, tuple):
-                    data = img[0] if len(img) > 0 else None
-                    ext = (img[1] if len(img) > 1 else "") or "png"
-                else:
-                    data = getattr(img, "data", None)
-                    ext = getattr(img, "ext", "") or "png"
-                if not data:
-                    continue
-                media_index += 1
-                ext = ext.lower().lstrip(".") or "png"
-                if ext not in {e.lstrip(".") for e in _IMAGE_EXTS}:
-                    ext = "png"
-                out.append(ExtractedMedia(
-                    source_rel_path=pdf_path.name,
-                    media_filename=f"page{page_num}_img{media_index}.{ext}",
-                    media_index=media_index,
-                    bytes=data,
-                    file_type=ext,
-                ))
-    except Exception as exc:
-        _logger.warning("extract_pdf_media failed for %s: %s", pdf_path, exc)
-        return []
-    return out
+    # PDF pages are best handled by MinerU's full-document parser, which
+    # extracts text in reading order across all pages. Splitting each page into
+    # a separate ".embedded_media/" item doesn't add information and causes
+    # topic-based backfill to pull in unrelated PDFs (e.g. SOP-65032 / SOP-65033
+    # sharing bigrams with password-policy findings).
+    return []

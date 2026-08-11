@@ -14,6 +14,11 @@ import openpyxl
 from chardet import detect
 
 from review.constants import CHECKPOINT_VOCAB
+from review.embedded_media import (
+    extract_docx_media,
+    extract_pdf_media,
+    extract_pptx_media,
+)
 
 _logger = logging.getLogger("review.attachments")
 from review.excel_utils import (
@@ -258,6 +263,137 @@ def build_evidence_inventory(
     return "\n".join(lines)
 
 
+def _refresh_embedded_media_index(
+    *,
+    root: Path,
+    source_paths: List[Path],
+    embedded_root: Path,
+    items: List[AttachmentFile],
+    by_filename: Dict[str, List[AttachmentFile]],
+    by_rel_path: Dict[str, List[AttachmentFile]],
+    status_counts: Dict[str, int],
+) -> None:
+    """Extract embedded images from office documents and mirror them as virtual items.
+
+    Each source document is processed independently: a failure in one file never
+    aborts extraction for the others. On-disk files are written before the
+    virtual AttachmentFile is registered, and stale extracted files (belonging to
+    source documents that no longer exist or were not extracted this run) are
+    removed so the snapshot stays consistent with the index.
+    """
+    embedded_root.mkdir(parents=True, exist_ok=True)
+
+    # Track which virtual rel_paths should exist after this run, and map disk
+    # filenames back to virtual rels so stale-file cleanup is exact even when
+    # source document names contain "__".
+    expected_rels: set[str] = set()
+    disk_to_rel: dict[str, str] = {}
+    extracted_count = 0
+    failed_sources: List[str] = []
+
+    for path in source_paths:
+        suffix = path.suffix.lower()
+        if suffix == ".docx":
+            extractor = extract_docx_media
+        elif suffix == ".pptx":
+            extractor = extract_pptx_media
+        elif suffix == ".pdf":
+            extractor = extract_pdf_media
+        else:
+            continue
+
+        rel_source = path.relative_to(root).as_posix()
+        try:
+            media_items = extractor(path)
+        except Exception as exc:
+            _logger.error(
+                "embedded media extraction failed for %s: %s", rel_source, exc,
+                exc_info=_logger.isEnabledFor(logging.DEBUG),
+            )
+            failed_sources.append(rel_source)
+            continue
+
+        for m in media_items:
+            disk_name = f"{path.name}__{m.media_filename}"
+            out_path = embedded_root / disk_name
+            rel = f".embedded_media/{path.name}::{m.media_filename}"
+            expected_rels.add(rel)
+            disk_to_rel[disk_name] = rel
+            try:
+                out_path.write_bytes(m.bytes)
+            except Exception as exc:
+                _logger.error(
+                    "failed to write embedded media %s: %s", out_path, exc,
+                    exc_info=_logger.isEnabledFor(logging.DEBUG),
+                )
+                failed_sources.append(f"{rel_source}/{m.media_filename}")
+                continue
+
+            existing = [it for it in items if it.rel_path == rel]
+            if existing:
+                # Refresh metadata in case the image changed.
+                for it in existing:
+                    it.size = len(m.bytes)
+                    it.file_type = m.file_type
+                continue
+
+            item = AttachmentFile(
+                index="",
+                rel_dir=".embedded_media",
+                filename=f"{path.name}::{m.media_filename}",
+                rel_path=rel,
+                file_type=m.file_type,
+                description="",
+                status="binary",
+                extraction_status="binary",
+                extracted_text="",
+                size=len(m.bytes),
+            )
+            items.append(item)
+            by_filename[item.filename].append(item)
+            by_rel_path[item.rel_path].append(item)
+            status_counts["binary"] += 1
+            extracted_count += 1
+
+    # Remove on-disk extracted files that no longer match any registered virtual
+    # item. This keeps the snapshot consistent when source documents change or
+    # when a prior extraction run left stale files behind.
+    if embedded_root.is_dir():
+        for child in list(embedded_root.iterdir()):
+            if not child.is_file():
+                continue
+            virtual_rel = disk_to_rel.get(child.name)
+            if virtual_rel is None or virtual_rel not in expected_rels:
+                try:
+                    child.unlink()
+                    _logger.debug("removed stale embedded media file: %s", child)
+                except Exception as exc:
+                    _logger.warning("could not remove stale embedded media %s: %s", child, exc)
+
+    # Drop virtual items whose on-disk file is no longer present.
+    stale_items = [it for it in items if it.rel_path.startswith(".embedded_media/") and it.rel_path not in expected_rels]
+    if stale_items:
+        stale_rel_paths = {it.rel_path for it in stale_items}
+        stale_filenames = {it.filename for it in stale_items}
+        items[:] = [it for it in items if it.rel_path not in stale_rel_paths]
+        for filename in stale_filenames:
+            by_filename[filename] = [it for it in by_filename.get(filename, []) if it.rel_path not in stale_rel_paths]
+            if not by_filename[filename]:
+                del by_filename[filename]
+        for rel_path in stale_rel_paths:
+            if rel_path in by_rel_path:
+                del by_rel_path[rel_path]
+        status_counts["binary"] = max(0, status_counts.get("binary", 0) - len(stale_items))
+
+    if extracted_count or failed_sources:
+        _logger.info(
+            "embedded media index refreshed: root=%s extracted=%d failed=%d",
+            root, extracted_count, len(failed_sources),
+        )
+    if failed_sources:
+        _logger.warning("embedded media extraction failures: %s", failed_sources)
+
+
 def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
     """Recursively index an attachment directory and extract bounded text.
 
@@ -279,6 +415,8 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
         and not path.is_symlink()
         and path.name not in _IGNORED_ATTACHMENT_NAMES
         and not path.name.startswith("~$")
+        and ".embedded_media/" not in path.relative_to(root).as_posix()
+        and path.relative_to(root).parts[:1] != (".embedded_media",)
     ]
     paths.sort(key=lambda path: path.relative_to(root).as_posix().lower())
     paths = paths[:_MAX_ATTACHMENT_FILES]
@@ -321,52 +459,16 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
 
     # After real attachment scanning, extract embedded media from DOCX/PPTX/PDF
     # and add them as virtual attachments indexed for Agent OCR.
-    try:
-        from review.embedded_media import (
-            extract_docx_media, extract_pptx_media, extract_pdf_media,
-        )
-        embedded_root = root / ".embedded_media"
-        embedded_root.mkdir(parents=True, exist_ok=True)
-        for path in list(paths):  # list() to snapshot, paths may be mutated below
-            suffix = path.suffix.lower()
-            if suffix == ".docx":
-                media_items = extract_docx_media(path)
-            elif suffix == ".pptx":
-                media_items = extract_pptx_media(path)
-            elif suffix == ".pdf":
-                media_items = extract_pdf_media(path)
-            else:
-                continue
-            for m in media_items:
-                # Windows rejects ':' in filenames; sanitize for the on-disk
-                # write while keeping the verbatim "::" form in the rel_path /
-                # filename metadata so callers and the test continue to match.
-                disk_name = f"{path.name}__{m.media_filename}"
-                out_path = embedded_root / disk_name
-                out_path.write_bytes(m.bytes)
-            for m in media_items:
-                rel = f".embedded_media/{path.name}::{m.media_filename}"
-                if any(it.rel_path == rel for it in items):
-                    continue
-                item = AttachmentFile(
-                    index="",
-                    rel_dir=".embedded_media",
-                    filename=f"{path.name}::{m.media_filename}",
-                    rel_path=rel,
-                    file_type=m.file_type,
-                    description="",
-                    status="binary",  # triggers ocr_attachment when Agent investigates
-                    extraction_status="binary",
-                    extracted_text="",
-                    size=len(m.bytes),
-                )
-                items.append(item)
-                by_filename[item.filename].append(item)
-                by_rel_path[item.rel_path].append(item)
-                # do NOT add to by_sheet_norm (no sheet context for embedded media)
-                status_counts["binary"] += 1
-    except Exception as exc:
-        _logger.warning("embedded media extraction failed: %s", exc)
+    embedded_root = root / ".embedded_media"
+    _refresh_embedded_media_index(
+        root=root,
+        source_paths=paths,
+        embedded_root=embedded_root,
+        items=items,
+        by_filename=by_filename,
+        by_rel_path=by_rel_path,
+        status_counts=status_counts,
+    )
 
     return {
         "path": str(root),
