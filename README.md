@@ -43,6 +43,99 @@ bash scripts/local_run.sh -m flow
 
 完整变量示例见 [.env.example](/Users/vyang/Desktop/spaces/audit-workpaper-agent/.env.example)。
 
+## 审阅逻辑与阶段说明
+
+系统把“当前可交付的审阅结论”和“用于验证、比较的候选结果”分开处理。核心原则是：
+
+- **V1 是当前权威结论**：保留现有审阅逻辑和结果字段，兼容已有 JSON、Excel 首表和调用方。
+- **质量信封是增量信息**：为每条 finding 补充证据校验、复核状态、来源 hash、根因分组和整改状态，不用空字段表示“已通过”。
+- **Evidence-First 阶段默认是 Shadow**：阶段 B/C 可以产生候选结果，但不能静默覆盖 V1；只有显式请求才允许导出 Stage C 候选。
+- **证据先于结论**：引用必须能够在本次审阅冻结的工作簿、附件索引或 Evidence Graph 中按定位、摘录和 hash 复现；无法复现的引用会被拒绝或使结论进入 `unknown`。
+
+### 端到端流程
+
+```mermaid
+flowchart TD
+    A[上传工作簿、检查要点、附件] --> B[固定输入快照]
+    B --> C[V1 审阅管线]
+    C --> D[质量信封与证据校验]
+    D --> E[保存 V1 findings]
+    B --> F[Stage A Evidence Graph]
+    F --> G[Stage B 确定性策略规则]
+    F --> H[Stage C 受限 LLM 判断]
+    E --> I[V1 / Shadow 逐条对照]
+    G --> I
+    H --> I
+    E --> J[Workbench 与默认 Excel 审阅包]
+    I --> K[只读 Shadow 摘要或显式候选导出]
+```
+
+### 阶段 0：输入与冻结快照
+
+审阅开始后先生成 `review_id`，把工作簿、检查要点、附件目录或附件预览固定到
+`assets/reviews/<review_id>/inputs/`。后续 V1、Evidence Graph、附件索引和 Shadow
+结果都应基于这份快照，而不是基于可能被替换的上传目录。
+
+快照同时记录输入文件名、大小和 SHA256；服务端对外只展示相对文件名、opaque ID 或 hash，
+不展示服务器绝对路径。快照失败会记录 artifact 错误，但不会把一个已经完成的 V1 结果
+伪装成 Stage A 已完成。
+
+### 阶段 1：V1 审阅管线（当前权威）
+
+V1 负责生成用户当前看到的发现。每个目标 Sheet 会按可用输入执行以下检查：
+
+1. 读取检查要点并进行 checkpoint 审阅。
+2. 匹配工作簿中的附件引用，必要时使用受限证据 Agent 查找快照内的证据文件。
+3. 检查“执行证据 ↔ 审计步骤”、程序配对、Sheet 范围和 A-C 对应关系。
+4. 对规则产生的 finding 做模型复核；对 P0 或明确升级项执行对抗式挑战。
+5. 对 `fail` / `unknown` 运行确定性交叉校验（由 `REVIEW_DETERMINISTIC_CROSSCHECK_MODE` 控制）。
+
+V1 输出仍保存到 `assets/results/<review_id>_findings.json`，并通过
+`GET /findings/{review_id}` 返回。V1 的 `total_findings` 是原始发现数，不会因为重复标记
+而被静默删除或改写。
+
+### 阶段 1.5：质量信封与证据验证
+
+V1 finding 保存前，系统会在冻结输入上附加 `quality`：
+
+| 质量信息 | 含义 |
+| --- | --- |
+| `finding_id` | 基于输入 hash、问题类型、定位、状态和证据身份生成的稳定 ID |
+| `primary_location` | 优先使用已验证的 Sheet/单元格；没有单元格时明确标记附件或未定位 |
+| `citation_validation` | `verified`、`partial`、`invalid` 或 `not_available`，并记录拒绝原因 |
+| `gates` | 每个复核步骤的 `passed`、`flagged`、`not_run` 或 `error` |
+| `provenance` | 输入 SHA256、引擎版本和策略包版本 |
+| `grouping` | 根因编号、严格重复关系和相关 finding ID |
+| `remediation` | 整改动作、所需证据、验收条件和待人工补全字段 |
+
+附件引用只有同时满足“来源属于该 Sheet 的审阅范围”“冻结文本中逐字且唯一命中”“文件
+hash/文本 hash/偏移可复现”时，才会进入已验证引用。歧义、越界或内容变更的引用不会
+出现在证据溯源表中。
+
+`REVIEW_RESULT_QUALITY_MODE` 控制质量信封：
+
+- `shadow`（默认）：写入质量信息，但保持 V1 原结论和兼容字段不变。
+- `on`：在证据无法验证时执行 fail-closed 降级，并保留原建议严重级别与降级原因。
+- `off`：关闭新增质量信封，回到历史 payload 形态。
+
+质量捕获本身失败时，系统会保存 V1，并在质量统计中记录错误；质量元数据不能阻断已完成
+的 V1 审阅。
+
+### 阶段 A：Evidence Graph（Shadow 基础层）
+
+阶段 A 从固定工作簿生成受边界约束的 Evidence Graph：Sheet、单元格坐标、单元格内容
+hash、证据 ID、输入 SHA256，以及附件索引和来源范围。它回答的是“本次审阅到底看到了
+哪一份冻结事实”，不直接替换 V1 finding。
+
+阶段 A artifact 通常包含：
+
+- `manifest.json`：审阅输入、目标 Sheet、引擎版本和 artifact 状态；
+- `evidence.json`：受限的工作簿事实和捕获统计；
+- `inputs/`：本次审阅所使用的固定输入快照。
+
+如果输入快照、证据图或附件目录发生错误，artifact 会标记为 `error`，但不会从 V1
+结果推断一个“看似完成”的 Shadow 证据链。
+
 ## 阶段 B 策略包试点
 
 审阅完成后，后端会在 `assets/reviews/<review_id>/` 中异步生成 Evidence-First shadow artifact。阶段 B 默认使用仓库内版本化的 `itgc-core/1.0.0` 策略包执行三条确定性规则，并写入：
@@ -66,6 +159,33 @@ bash scripts/local_run.sh -m flow
 服务端只接受请求白名单内的证据 ID、合法偏移、逐字摘录和匹配的内容哈希；校验失败或证据不足会落为 `unknown`，不会用模型自行生成的路径或摘录补证。阶段 C 失败只会把 shadow artifact 标记为 error，既不会覆盖 `findings.json`，也不会改变现有 V1 `/findings/{review_id}` 响应。启用该模式会消耗 `REVIEW_LLM_MODEL` 对应的 LLM 额度，并受 `REVIEW_JUDGEMENT_MAX_REQUESTS` 限制。
 
 相关配置：`REVIEW_JUDGEMENT_MODE=shadow|off`（默认 `off`）、`REVIEW_JUDGEMENT_PACK_ID`、`REVIEW_JUDGEMENT_PACK_VERSION`、可选的 `REVIEW_JUDGEMENT_PACK_ROOT` 和 `REVIEW_JUDGEMENT_MAX_REQUESTS`。未设置 `REVIEW_JUDGEMENT_PACK_ROOT` 时，会复用 `REVIEW_POLICY_PACK_ROOT`，再回退到仓库内 `policy_packs/`。
+
+## V1 / Shadow 对照与候选边界
+
+Stage C 产物完成后，系统会把 V1 finding 与 V2 finding 做逐条、可复现的精确对照。配对
+只使用稳定结构化身份、Sheet/定位、状态和证据 ID，不使用自由文本相似度。差异分类包括：
+
+- `agreement`：状态和证据身份一致；
+- `legacy_only`：只有 V1 有该发现；
+- `shadow_only`：只有 Shadow 有该发现；
+- `status_conflict`：同一结构化身份的状态不同；
+- `evidence_conflict`：状态相同但证据身份不同；
+- `not_comparable`：身份缺失或出现歧义，系统拒绝猜测配对。
+
+对照摘要保存在 `comparison.json`，工作台只显示受限的 ID、状态和计数。它的明确语义是
+“候选差异，尚未成为权威结论”。
+
+导出规则如下：
+
+| 请求 | 使用的来源 | 结果 |
+| --- | --- | --- |
+| `/findings/{review_id}/export?format=xlsx` | V1 | 默认、兼容的审阅包 |
+| `...&source=legacy` | V1 | 与默认行为相同 |
+| `...&source=stage_c_shadow` | Stage C | 只有 artifact 已完成时才导出候选；缺失或未完成返回 `409` |
+| 未知 `source` | V1 | 安全回退到 legacy，不隐式选择 V2 |
+
+Stage B/C 的任何异常只会影响 Shadow artifact 状态。只要 V1 已完成，用户仍可查看 V1
+结果、导出默认审阅包并在稍后检查 Shadow 错误。
 
 ## Workbench 中查看阶段结果
 
