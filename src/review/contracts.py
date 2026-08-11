@@ -11,6 +11,14 @@ InputRole = Literal["workpaper", "checkpoints", "attachments_dir", "attachments_
 CaptureStatus = Literal["complete", "truncated"]
 ArtifactStatus = Literal["running", "completed", "error"]
 
+# Additive quality metadata used by the legacy V1 finding projection. These
+# aliases live beside the Evidence-First contracts so API/artifact consumers
+# can share the vocabulary without changing the V1 finding shape.
+CitationValidationStatus = Literal[
+    "verified", "partial", "invalid", "not_available"
+]
+QualityGateStatus = Literal["passed", "flagged", "not_run", "error"]
+
 
 class InputFile(BaseModel):
     role: InputRole

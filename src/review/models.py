@@ -77,6 +77,11 @@ class Finding:
     fix_suggestion_detail: str = "{}"  # JSON string of dict
     unknown_reason: str = ""
     needs_review: bool = False
+    # Stable provenance hints used by the additive review-quality envelope.
+    # They remain optional so existing rule constructors and stored V1 data
+    # continue to deserialize unchanged.
+    origin: str = "legacy"
+    rule_hint: str = ""
 
 
 @dataclass(frozen=True)
