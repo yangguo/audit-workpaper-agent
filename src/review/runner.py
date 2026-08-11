@@ -233,6 +233,12 @@ async def _run_review(
             )
         else:
             attachments = {}
+        # Stash review_id on the attachments dict so downstream helpers (OCR
+        # artifact persistence, evidence snapshots) can locate the right
+        # review artifact directory.
+        if attachments:
+            attachments["review_id"] = review_id
+        LLM_CALL_STATS.clear()
         LLM_CALL_STATS.clear()
         llm = get_review_llm()
         findings, stats = await run_review(
