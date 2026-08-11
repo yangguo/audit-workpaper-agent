@@ -31,7 +31,7 @@ _LIGHTWEIGHT_MAX_BYTES = 10 * 1024 * 1024
 _PRECISE_MAX_BYTES = 200 * 1024 * 1024
 _DEFAULT_MAX_WAIT_SECONDS = 300.0
 _DEFAULT_POLL_INTERVAL_SECONDS = 2.0
-_DEFAULT_MAX_TEXT_CHARS = 12000
+_DEFAULT_MAX_TEXT_CHARS = 60000
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 
 
@@ -62,6 +62,7 @@ class MinerUClient:
         max_text_chars: int = _DEFAULT_MAX_TEXT_CHARS,
         max_file_bytes: Optional[int] = None,
         sleep: Callable[[float], None] = time.sleep,
+        verify_ssl: bool = True,
     ) -> None:
         normalized_mode = str(mode or "auto").strip().lower()
         if normalized_mode not in {"off", "auto", "lightweight", "precise"}:
@@ -81,6 +82,7 @@ class MinerUClient:
             else None
         )
         self.sleep = sleep
+        self.verify_ssl = bool(verify_ssl)
 
     @classmethod
     def from_env(cls) -> Optional["MinerUClient"]:
@@ -96,6 +98,7 @@ class MinerUClient:
             poll_interval=_env_float("MINERU_OCR_POLL_INTERVAL_SECONDS", _DEFAULT_POLL_INTERVAL_SECONDS),
             max_text_chars=_env_int("MINERU_OCR_MAX_TEXT_CHARS", _DEFAULT_MAX_TEXT_CHARS),
             max_file_bytes=_env_optional_int("MINERU_OCR_MAX_FILE_BYTES"),
+            verify_ssl=_env_bool("MINERU_VERIFY_SSL", True),
         )
 
     @property
@@ -347,6 +350,7 @@ class MinerUClient:
         }
 
     def _request(self, method: str, url: str, **kwargs: Any) -> Any:
+        kwargs.setdefault("verify", self.verify_ssl)
         response = getattr(self.http, method)(url, timeout=30, **kwargs)
         try:
             response.raise_for_status()
@@ -408,3 +412,12 @@ def _env_float(key: str, default: float) -> float:
         return max(0.0, float(os.getenv(key, str(default))))
     except (TypeError, ValueError):
         return default
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = str(os.getenv(key, "") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
