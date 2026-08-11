@@ -262,7 +262,7 @@ async def upload_files(
             logger.error(f"Upload failed for {original_name}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Upload failed: {type(e).__name__}: {e}") from e
 
-        if not rel_path.resolve().is_relative_to(upload_dir_resolved):
+        if not Path(rel_path).resolve().is_relative_to(upload_dir_resolved):
             raise HTTPException(status_code=400, detail="Invalid upload path")
 
         if deduplicated:
