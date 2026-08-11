@@ -138,13 +138,21 @@ export function ReviewArtifactPanel({
             这里展示固定证据、规则候选和受限判断；当前审阅结论仍以 V1 结果为准。
           </p>
         </div>
-        <StageStatus
-          status={
-            artifact.artifact_status === "completed"
-              ? "completed"
-              : artifact.artifact_status
-          }
-        />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="rounded-md bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">
+            V1 当前权威
+          </span>
+          <span className="rounded-md bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700">
+            Stage B/C shadow 候选
+          </span>
+          <StageStatus
+            status={
+              artifact.artifact_status === "completed"
+                ? "completed"
+                : artifact.artifact_status
+            }
+          />
+        </div>
       </div>
 
       {artifact.artifact_error ? (

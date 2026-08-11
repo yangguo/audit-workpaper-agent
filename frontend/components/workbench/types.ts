@@ -72,6 +72,65 @@ export type EvidenceRef = {
   cell_or_range?: string;
   attachment?: string;
   excerpt?: string;
+  quote?: string;
+  source_kind?: string;
+  source_ref?: string;
+  evidence_id?: string;
+  source_sha256?: string;
+  content_hash?: string;
+  start_offset?: number;
+  end_offset?: number;
+};
+
+export type FindingQualityGateStatus =
+  | "passed"
+  | "flagged"
+  | "not_run"
+  | "error";
+
+export type FindingQualityGate = {
+  status: FindingQualityGateStatus;
+  reason?: string;
+  issues?: string[];
+  duration_ms?: number | null;
+};
+
+export type FindingQuality = {
+  schema_version?: string;
+  finding_id?: string;
+  primary_location?: {
+    source_kind?: "cell" | "attachment" | "unknown";
+    sheet?: string;
+    cell_or_range?: string;
+    source_ref?: string;
+    evidence_id?: string | null;
+  } | null;
+  citation_validation?: {
+    status?: "verified" | "partial" | "invalid" | "not_available";
+    verified_count?: number;
+    rejected_count?: number;
+    rejection_codes?: string[];
+    evidence_ids?: string[];
+    verified_refs?: EvidenceRef[];
+  };
+  gates?: Record<string, FindingQualityGate>;
+  provenance?: {
+    input_sha256?: string;
+    engine_version?: string;
+    policy_pack?: { id?: string; version?: string } | null;
+  };
+  grouping?: {
+    root_cause_id?: string | null;
+    duplicate_of?: string | null;
+    related_finding_ids?: string[];
+  };
+  remediation?: {
+    status?: "actionable" | "needs_human_refinement" | "not_available";
+    action?: string;
+    required_evidence?: string[];
+    acceptance_criteria?: string[];
+    missing_fields?: string[];
+  };
 };
 
 export type OcrStats = {
@@ -143,6 +202,7 @@ export type EvidenceAgentStatsPayload = {
 };
 
 export type Finding = {
+  finding_id?: string;
   issue_type: string;
   severity?: string;
   severity_display?: string;
@@ -172,6 +232,7 @@ export type Finding = {
   unknown_reason?: string;
   cross_validate_issues?: string[];
   challenge_verdict?: string | null;
+  quality?: FindingQuality;
 };
 
 export type FindingsPayload = {

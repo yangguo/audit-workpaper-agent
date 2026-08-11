@@ -385,14 +385,108 @@ describe("WorkbenchShell", () => {
     expect(screen.getByText("“密码最小长度为 12 个字符”")).toBeInTheDocument();
   });
 
+  it("renders quality provenance, truthful gate states, grouping, and open remediation items", () => {
+    render(
+      <WorkbenchShell
+        {...baseWorkbenchProps}
+        analysisSections={[
+          {
+            title: "P1 中风险问题（1）",
+            body: "",
+            findings: [
+              {
+                issue_type: "证据类型缺失",
+                severity: "P1",
+                status: "unknown",
+                sheet: "SA-4c",
+                evidence_refs: [
+                  { attachment: "foreign.txt", excerpt: "不得显示的拒绝引用" },
+                  { sheet: "SA-4c", cell_or_range: "D12", excerpt: "已验证引用" },
+                ],
+                quality: {
+                  schema_version: "review-quality/1",
+                  finding_id: "legacy:quality-1",
+                  primary_location: {
+                    source_kind: "cell",
+                    sheet: "SA-4c",
+                    cell_or_range: "D12",
+                    source_ref: "workpaper:SA-4c!D12",
+                    evidence_id: "cell:12",
+                  },
+                  citation_validation: {
+                    status: "partial",
+                    verified_count: 1,
+                    rejected_count: 1,
+                    rejection_codes: ["out_of_scope_source"],
+                    verified_refs: [
+                      {
+                        source_kind: "cell",
+                        sheet: "SA-4c",
+                        cell_or_range: "D12",
+                        evidence_id: "cell:12",
+                        excerpt: "已验证引用",
+                      },
+                    ],
+                  },
+                  gates: {
+                    deterministic_cross_check: {
+                      status: "passed",
+                      reason: "已执行确定性交叉校验",
+                    },
+                    model_re_review: {
+                      status: "not_run",
+                      reason: "同一 V1 模型来源，未进行独立复核",
+                    },
+                    adversarial_challenge: {
+                      status: "not_run",
+                      reason: "仅对 P0 或升级项执行",
+                    },
+                  },
+                  provenance: {
+                    input_sha256: "abcdef1234567890",
+                    engine_version: "stage-a-quality-shadow",
+                  },
+                  grouping: {
+                    root_cause_id: "root:abc123",
+                    duplicate_of: null,
+                    related_finding_ids: [],
+                  },
+                  remediation: {
+                    status: "needs_human_refinement",
+                    action: "补充抽样依据",
+                    required_evidence: ["用户权限导出清单"],
+                    acceptance_criteria: ["可由复核人按清单复现"],
+                    missing_fields: ["责任范围"],
+                  },
+                },
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    const findingCard = screen.getByTestId("finding-card");
+    expect(findingCard).toHaveTextContent("引用部分验证");
+    expect(findingCard).toHaveTextContent("主定位：SA-4c!D12");
+    expect(findingCard).toHaveTextContent("确定性交叉校验：已通过");
+    expect(findingCard).toHaveTextContent("模型复核：未执行");
+    expect(findingCard).toHaveTextContent("同一 V1 模型来源，未进行独立复核");
+    expect(findingCard).toHaveTextContent("对抗式挑战：未执行");
+    expect(findingCard).toHaveTextContent("根因编号：root:abc123");
+    expect(findingCard).toHaveTextContent("整改待补全：责任范围");
+    expect(findingCard).toHaveTextContent("输入版本：abcdef12");
+    expect(findingCard).not.toHaveTextContent("foreign.txt");
+  });
+
   it("renders export button when reviewId is provided", () => {
     render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
-    expect(screen.getByText("导出 Excel 报告")).toBeInTheDocument();
+    expect(screen.getByText("导出审阅包（含质量与溯源）")).toBeInTheDocument();
   });
 
   it("hides export button when reviewId is absent", () => {
     render(<WorkbenchShell {...baseWorkbenchProps} />);
-    expect(screen.queryByText("导出 Excel 报告")).not.toBeInTheDocument();
+    expect(screen.queryByText("导出审阅包（含质量与溯源）")).not.toBeInTheDocument();
   });
 
   describe("export click behaviour", () => {
@@ -432,7 +526,7 @@ describe("WorkbenchShell", () => {
 
       render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
 
-      const button = screen.getByRole("button", { name: "导出 Excel 报告" });
+      const button = screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" });
       expect(button).not.toBeDisabled();
       await user.click(button);
 
@@ -460,7 +554,7 @@ describe("WorkbenchShell", () => {
 
       render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
 
-      const button = screen.getByRole("button", { name: "导出 Excel 报告" });
+      const button = screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" });
       await user.click(button);
 
       // While the promise is pending the button must reflect the loading state.
@@ -484,7 +578,7 @@ describe("WorkbenchShell", () => {
       });
 
       render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
-      await user.click(screen.getByRole("button", { name: "导出 Excel 报告" }));
+      await user.click(screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" }));
 
       await vi.waitFor(() => {
         expect(toast.error).toHaveBeenCalledTimes(1);
@@ -497,7 +591,7 @@ describe("WorkbenchShell", () => {
       fetchMock.mockRejectedValue(new Error("network down"));
 
       render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
-      await user.click(screen.getByRole("button", { name: "导出 Excel 报告" }));
+      await user.click(screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" }));
 
       await vi.waitFor(() => {
         expect(toast.error).toHaveBeenCalledTimes(1);

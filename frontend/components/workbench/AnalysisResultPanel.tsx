@@ -8,7 +8,13 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 
 import { Button } from "@/components/ui/button";
-import type { AnalysisSection, EvidenceRef, Finding } from "./types";
+import type {
+  AnalysisSection,
+  EvidenceRef,
+  Finding,
+  FindingQuality,
+  FindingQualityGate,
+} from "./types";
 
 const markdownComponents: any = {
   p: ({ children }: { children?: React.ReactNode }) => (
@@ -121,7 +127,9 @@ const FIX_DETAIL_LABELS: Record<string, string> = {
 };
 
 function findingLocation(finding: Finding): string {
-  const locations = (finding.evidence_refs || [])
+  const qualityRefs = finding.quality?.citation_validation?.verified_refs;
+  const refs = finding.quality ? qualityRefs || [] : finding.evidence_refs;
+  const locations = (refs || [])
     .map((ref) => evidenceLocation(ref, finding))
     .filter(Boolean);
   if (locations.length > 0) return [...new Set(locations)].join("、");
@@ -133,6 +141,175 @@ function evidenceLocation(ref: EvidenceRef, finding: Finding): string {
   return [ref.sheet || finding.sheet, ref.cell_or_range || finding.cell]
     .filter(Boolean)
     .join("!");
+}
+
+const CITATION_STATUS_LABELS: Record<string, string> = {
+  verified: "引用已验证",
+  partial: "引用部分验证",
+  invalid: "引用无效",
+  not_available: "引用不可用",
+};
+
+const GATE_LABELS: Record<string, string> = {
+  deterministic_cross_check: "确定性交叉校验",
+  model_re_review: "模型复核",
+  adversarial_challenge: "对抗式挑战",
+};
+
+const GATE_STATUS_LABELS: Record<string, string> = {
+  passed: "已通过",
+  flagged: "已标记",
+  not_run: "未执行",
+  error: "执行异常",
+};
+
+const CITATION_STATUS_STYLES: Record<string, string> = {
+  verified: "bg-emerald-100 text-emerald-700",
+  partial: "bg-amber-100 text-amber-700",
+  invalid: "bg-red-100 text-red-700",
+  not_available: "bg-slate-100 text-slate-600",
+};
+
+function safeQualityText(value: string | undefined, limit = 160): string {
+  const text = value?.trim() || "";
+  if (!text || text.startsWith("/") || text.includes("..")) return "";
+  return text.slice(0, limit);
+}
+
+function qualityLocation(quality: FindingQuality): string {
+  const location = quality.primary_location;
+  if (!location) return "未定位";
+  const cell = [location.sheet, location.cell_or_range]
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join("!");
+  if (cell) return cell;
+  const sourceRef = safeQualityText(location.source_ref);
+  return sourceRef || (location.source_kind === "attachment" ? "附件定位" : "未定位");
+}
+
+function QualityGate({
+  name,
+  gate,
+}: {
+  name: string;
+  gate: FindingQualityGate;
+}) {
+  const label = GATE_LABELS[name] || name;
+  const status = GATE_STATUS_LABELS[gate.status] || gate.status;
+  return (
+    <li className="text-xs leading-5 text-slate-600">
+      <span className="font-medium text-slate-700">{label}：</span>
+      {status}
+      {gate.status === "not_run" && gate.reason ? `（${gate.reason}）` : ""}
+      {gate.status === "flagged" && gate.issues?.length
+        ? `（${gate.issues.join("；")}）`
+        : ""}
+      {gate.status === "error" && gate.reason ? `（${gate.reason}）` : ""}
+    </li>
+  );
+}
+
+function FindingQualityPanel({ quality }: { quality: FindingQuality }) {
+  const citation = quality.citation_validation;
+  const citationStatus = citation?.status || "not_available";
+  const citationLabel =
+    CITATION_STATUS_LABELS[citationStatus] || citationStatus;
+  const gates = quality.gates || {};
+  const grouping = quality.grouping;
+  const remediation = quality.remediation;
+  const inputHash = quality.provenance?.input_sha256?.trim();
+  const missingFields = remediation?.missing_fields || [];
+  const requiredEvidence = remediation?.required_evidence || [];
+  const acceptanceCriteria = remediation?.acceptance_criteria || [];
+
+  return (
+    <div
+      data-testid="finding-quality"
+      className="mt-4 rounded-lg border border-slate-200 bg-slate-50/80 p-3"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold text-slate-700">质量与溯源</p>
+        <span
+          className={`rounded-md px-2 py-1 text-xs font-medium ${CITATION_STATUS_STYLES[citationStatus] || CITATION_STATUS_STYLES.not_available}`}
+        >
+          {citationLabel}
+        </span>
+        <span className="text-xs text-slate-500">
+          已验证 {citation?.verified_count ?? 0} · 拒绝 {citation?.rejected_count ?? 0}
+        </span>
+      </div>
+
+      <dl className="mt-2 space-y-1 text-xs leading-5 text-slate-600">
+        <div>
+          <dt className="inline font-medium text-slate-700">主定位：</dt>
+          <dd className="inline">{qualityLocation(quality)}</dd>
+        </div>
+        {Object.keys(gates).length > 0 ? (
+          <div>
+            <dt className="font-medium text-slate-700">复核状态：</dt>
+            <dd>
+              <ul className="mt-1 space-y-0.5">
+                {Object.entries(gates).map(([name, gate]) => (
+                  <QualityGate key={name} name={name} gate={gate} />
+                ))}
+              </ul>
+            </dd>
+          </div>
+        ) : null}
+        {grouping?.root_cause_id ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">根因编号：</dt>
+            <dd className="inline">{grouping.root_cause_id}</dd>
+          </div>
+        ) : null}
+        {grouping?.duplicate_of ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">重复于：</dt>
+            <dd className="inline">{grouping.duplicate_of}</dd>
+          </div>
+        ) : null}
+        {remediation?.status && remediation.status !== "not_available" ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">整改状态：</dt>
+            <dd className="inline">
+              {remediation.status === "actionable" ? "可执行" : "需人工补全"}
+            </dd>
+          </div>
+        ) : null}
+        {remediation?.action ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">整改动作：</dt>
+            <dd className="inline">{remediation.action}</dd>
+          </div>
+        ) : null}
+        {requiredEvidence.length > 0 ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">所需证据：</dt>
+            <dd className="inline">{requiredEvidence.join("、")}</dd>
+          </div>
+        ) : null}
+        {acceptanceCriteria.length > 0 ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">验收条件：</dt>
+            <dd className="inline">{acceptanceCriteria.join("；")}</dd>
+          </div>
+        ) : null}
+        {missingFields.length > 0 ? (
+          <div>
+            <dt className="inline font-medium text-amber-700">整改待补全：</dt>
+            <dd className="inline text-amber-700">{missingFields.join("、")}</dd>
+          </div>
+        ) : null}
+        {inputHash ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">输入版本：</dt>
+            <dd className="inline">{inputHash.slice(0, 8)}</dd>
+          </div>
+        ) : null}
+      </dl>
+    </div>
+  );
 }
 
 function parseJsonValue(value: unknown): unknown {
@@ -362,11 +539,14 @@ function FindingCard({ finding }: { finding: Finding }) {
         ) : null}
       </dl>
 
-      {finding.evidence_refs?.length ? (
+      {(() => {
+        const verifiedRefs = finding.quality?.citation_validation?.verified_refs;
+        const refs = finding.quality ? verifiedRefs || [] : finding.evidence_refs;
+        return refs?.length ? (
         <div className="mt-4 border-t border-slate-200/80 pt-3">
           <p className="text-xs font-medium text-slate-500">证据引用</p>
           <div className="mt-2 space-y-2">
-            {finding.evidence_refs.map((ref, index) => (
+            {refs.map((ref, index) => (
               <EvidenceReference
                 key={`${evidenceLocation(ref, finding)}-${index}`}
                 ref={ref}
@@ -376,7 +556,10 @@ function FindingCard({ finding }: { finding: Finding }) {
             ))}
           </div>
         </div>
-      ) : finding.snippet ? (
+        ) : null;
+      })()}
+      {finding.quality ? <FindingQualityPanel quality={finding.quality} /> : null}
+      {!finding.quality && !finding.evidence_refs?.length && finding.snippet ? (
         <FindingField
           label="原文摘录"
           value={finding.snippet}
@@ -458,7 +641,7 @@ export function AnalysisResultPanel({
             disabled={exporting}
           >
             <Download className="mr-1 size-4" />
-            导出 Excel 报告
+            导出审阅包（含质量与溯源）
           </Button>
         ) : null}
       </div>
