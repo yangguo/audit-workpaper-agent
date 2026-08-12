@@ -2,6 +2,7 @@ from review.remediation import (
     annotate_finding_groups,
     build_remediation,
 )
+from review.finding_taxonomy import default_assertion_catalog
 from review.remediation_catalog import load_remediation_catalog
 
 
@@ -167,6 +168,28 @@ def test_grouping_preserves_existing_v1_finding_id():
 
     assert annotated["finding_id"] == "legacy-finding-id"
     assert annotated["quality"]["finding_id"].startswith("finding:")
+
+
+def test_grouping_uses_the_active_assertion_catalog_root_family():
+    default_catalog = default_assertion_catalog()
+    custom_catalog = default_catalog.model_copy(
+        update={
+            "assertions": [
+                assertion.model_copy(update={"root_family": ""})
+                if assertion.assertion_id == "scope.privileged_account.coverage"
+                else assertion
+                for assertion in default_catalog.assertions
+            ]
+        }
+    )
+
+    annotated = annotate_finding_groups(
+        [_finding("f-1")],
+        input_set_sha256="set-1",
+        assertion_catalog=custom_catalog,
+    )[0]
+
+    assert annotated["quality"]["grouping"]["root_cause_id"] is None
 
 
 def test_build_remediation_marks_generic_suggestion_for_human_refinement():

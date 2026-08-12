@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any, Iterable, Mapping
 
-from review.finding_taxonomy import default_assertion_catalog
+from review.finding_taxonomy import AssertionCatalog, default_assertion_catalog
 from review.remediation_catalog import RemediationCatalog
 from review.result_quality import (
     canonicalize_evidence_refs,
@@ -136,11 +136,15 @@ def exact_duplicate_fingerprint(
 
 
 def root_cause_key(
-    finding: Mapping[str, Any], *, input_set_sha256: str = ""
+    finding: Mapping[str, Any],
+    *,
+    input_set_sha256: str = "",
+    assertion_catalog: AssertionCatalog | None = None,
 ) -> str | None:
     """Group only catalog-linked assertion families within one input scope."""
 
-    assertion = default_assertion_catalog().maybe_assertion(
+    catalog = assertion_catalog or default_assertion_catalog()
+    assertion = catalog.maybe_assertion(
         _text(finding.get("assertion_id"))
     )
     input_set = _input_set_sha256(finding, input_set_sha256)
@@ -169,6 +173,7 @@ def annotate_finding_groups(
     *,
     input_set_sha256: str = "",
     input_sha256: str = "",
+    assertion_catalog: AssertionCatalog | None = None,
 ) -> list[dict[str, Any]]:
     """Annotate rows without deleting raw findings or merging by cell alone."""
 
@@ -185,7 +190,11 @@ def annotate_finding_groups(
     root_by_index: list[str | None] = []
     duplicate_by_index: list[str | None] = []
     for row, finding_id in zip(rows, identifiers):
-        root_key = root_cause_key(row, input_set_sha256=input_set_sha256)
+        root_key = root_cause_key(
+            row,
+            input_set_sha256=input_set_sha256,
+            assertion_catalog=assertion_catalog,
+        )
         root_id = f"root:{root_key[:32]}" if root_key else None
         if root_id:
             root_members.setdefault(root_id, []).append(finding_id)
@@ -300,11 +309,13 @@ def enrich_finding_quality(
     input_set_sha256: str = "",
     input_sha256: str = "",
     catalog: RemediationCatalog,
+    assertion_catalog: AssertionCatalog | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     rows = annotate_finding_groups(
         findings,
         input_set_sha256=input_set_sha256,
         input_sha256=input_sha256,
+        assertion_catalog=assertion_catalog,
     )
     for row in rows:
         quality = dict(row.get("quality") or {})

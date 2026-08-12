@@ -721,6 +721,7 @@ async def _run_review(
                         input_set_sha256=input_set_sha256,
                         input_sha256=input_sha256,
                         catalog=remediation_catalog,
+                        assertion_catalog=assertion_catalog,
                     )
                     quality_stats["remediation_catalog"] = {
                         "status": "loaded",
@@ -734,6 +735,7 @@ async def _run_review(
                         findings,
                         input_set_sha256=input_set_sha256,
                         input_sha256=input_sha256,
+                        assertion_catalog=assertion_catalog,
                     )
                     group_stats = grouping_stats(findings)
                     quality_stats["remediation_catalog"] = {
