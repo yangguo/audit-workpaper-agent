@@ -6,7 +6,7 @@ over the project's ChatOpenAI-based llm helper.
 import json
 import os
 import re
-from typing import List, Optional
+from typing import Any, List, Mapping, Optional
 
 from openpyxl.utils import get_column_letter
 
@@ -20,6 +20,14 @@ _CHALLENGER_FULL_TEXT_DEFAULT = True
 _CHALLENGER_PER_REF = 2000
 _CHALLENGER_TOTAL = 6000
 _CHALLENGER_RADIUS = 800
+
+
+def _finding_value(finding: Any, name: str, default: Any = "") -> Any:
+    """Read a legacy Finding object or the immutable mapping used by gates."""
+
+    if isinstance(finding, Mapping):
+        return finding.get(name, default)
+    return getattr(finding, name, default)
 
 
 def _challenger_full_text_enabled() -> bool:
@@ -89,15 +97,21 @@ def _cross_validate_finding(finding, wb) -> List[str]:
     Returns issue codes; empty means no issues found.
     """
     issues: List[str] = []
-    sheet = finding.sheet
+    sheet = _finding_value(finding, "sheet")
     cell_refs: List[str] = []
-    if finding.cell:
-        for c in str(finding.cell).split(","):
+    cell = _finding_value(finding, "cell")
+    if cell:
+        for c in str(cell).split(","):
             c = c.strip()
             if c:
                 cell_refs.append(c)
     try:
-        refs = json.loads(finding.evidence_refs) if finding.evidence_refs else []
+        evidence_refs = _finding_value(finding, "evidence_refs", [])
+        refs = (
+            json.loads(evidence_refs)
+            if isinstance(evidence_refs, str) and evidence_refs
+            else evidence_refs
+        )
     except Exception:
         refs = []
     if isinstance(refs, list):
@@ -109,35 +123,12 @@ def _cross_validate_finding(finding, wb) -> List[str]:
         return issues
     ws = wb[sheet]
 
-    if finding.status == "pass":
+    if _finding_value(finding, "status") == "pass":
         for c in cell_refs:
             txt = _get_cell_text(ws, c)
             if txt and any(tok in txt for tok in _EXCEPTION_FLAG_TOKENS):
                 issues.append("exception_flag_contradicts_pass")
                 break
-
-    if finding.risk_type == "覆盖性":
-        found_sample_size = False
-        for row in ws.iter_rows(values_only=False, min_row=1, max_row=min(80, ws.max_row or 80)):
-            for c in row:
-                if not c.value:
-                    continue
-                cv = str(c.value)
-                if any(k in cv for k in ("样本量", "样本数量", "测试期间样本")):
-                    for r in range(c.row, min(c.row + 5, ws.max_row + 1)):
-                        for cc in range(c.column, min(c.column + 6, ws.max_column + 1)):
-                            v = ws.cell(row=r, column=cc).value
-                            if v is not None and str(v).strip() and str(v).strip() not in ("样本量", "样本数量", "测试期间样本"):
-                                found_sample_size = True
-                                break
-                        if found_sample_size:
-                            break
-                if found_sample_size:
-                    break
-            if found_sample_size:
-                break
-        if not found_sample_size:
-            issues.append("coverage_claim_but_no_sample_size")
 
     for r in refs if isinstance(refs, list) else []:
         if not isinstance(r, dict):
@@ -168,7 +159,10 @@ def _cross_validate_finding(finding, wb) -> List[str]:
             issues.append("evidence_excerpt_mismatch_attachment")
             break
 
-    if finding.status == "fail" and finding.severity == "P0":
+    if (
+        _finding_value(finding, "status") == "fail"
+        and _finding_value(finding, "severity") == "P0"
+    ):
         if not refs:
             issues.append("high_severity_no_evidence")
 

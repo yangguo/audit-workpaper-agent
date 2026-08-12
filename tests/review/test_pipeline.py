@@ -5,8 +5,15 @@ import openpyxl
 import pytest
 from langchain_core.messages import AIMessage
 
-import review.pipeline as pipeline_mod
-from review.pipeline import run_review, _parse_sheet_filter, _finding_to_dict, _backfill_embedded_evidence_refs
+from review.pipeline import (
+    _backfill_embedded_evidence_refs,
+    _finding_to_dict,
+    _model_re_review_gate,
+    _parse_sheet_filter,
+    run_review,
+)
+from review.finding_taxonomy import default_assertion_catalog
+from review.quality_gates import build_quality_gate_context
 from review.models import AttachmentFile, Finding
 
 
@@ -383,26 +390,29 @@ async def test_run_review_assigns_controlled_assertion_and_claim(monkeypatch):
 async def test_run_review_records_gate_status_for_non_p0_findings(monkeypatch):
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
     monkeypatch.setenv("REVIEW_DETERMINISTIC_CROSSCHECK_MODE", "all_findings")
-    cross_checked = []
-
-    def _cross_check(finding, workbook):
-        cross_checked.append(finding.issue_type)
-        return []
-
-    monkeypatch.setattr(pipeline_mod, "_cross_validate_finding", _cross_check)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "SA-4c"
     ws["A1"] = "管理员账号识别情况"
     llm = _FakeLLM(_pass_review_payload())
-
-    findings, _ = await run_review(
-        wb=wb, checkpoints={}, attachments_preview={}, sheets=None, llm=llm,
+    gate_context = build_quality_gate_context(
+        workbook=wb,
+        evidence_registry=None,
+        assertion_catalog=default_assertion_catalog(),
     )
 
-    assert cross_checked
+    findings, _ = await run_review(
+        wb=wb,
+        checkpoints={},
+        attachments_preview={},
+        sheets=None,
+        llm=llm,
+        quality_gate_context=gate_context,
+    )
+
     gates = findings[0]["quality_gates"]
-    assert gates["deterministic_cross_check"]["status"] == "passed"
+    assert gates["evidence_excerpt_matches_frozen_source"]["status"] == "passed"
+    assert gates["evidence_excerpt_matches_frozen_source"]["duration_ms"] >= 0
     assert gates["adversarial_challenge"]["status"] == "not_run"
     assert gates["adversarial_challenge"]["reason"]
     assert gates["model_re_review"]["status"] in {
@@ -423,9 +433,61 @@ async def test_run_review_marks_cross_check_not_run_when_disabled(monkeypatch):
         llm=_FakeLLM(_pass_review_payload()),
     )
 
-    gate = findings[0]["quality_gates"]["deterministic_cross_check"]
+    gate = findings[0]["quality_gates"]["evidence_excerpt_matches_frozen_source"]
     assert gate["status"] == "not_run"
     assert "disabled" in gate["reason"]
+    assert gate["duration_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_direct_pipeline_does_not_pass_registry_gate_without_context(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    monkeypatch.setenv("REVIEW_DETERMINISTIC_CROSSCHECK_MODE", "all_findings")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SA-1"
+    ws["A1"] = "见附件9"
+    attachments = {
+        "source_type": "preview",
+        "items": [],
+        "by_filename": {},
+        "by_rel_path": {},
+        "by_index": {},
+        "by_sheet_norm": {},
+    }
+
+    findings, _ = await run_review(
+        wb=wb,
+        checkpoints={},
+        attachments=attachments,
+        sheets=None,
+        llm=_FakeLLM(_pass_review_payload()),
+    )
+
+    finding = next(
+        item
+        for item in findings
+        if item["assertion_id"] == "attachment.inventory.presence"
+    )
+    gates = finding["quality_gates"]
+    assert gates["attachment_inventory_consistent"]["status"] == "not_run"
+    assert gates["attachment_inventory_consistent"]["reason"] == "quality_context_unavailable"
+    assert gates["claim_has_required_source_kind"]["status"] == "not_run"
+
+
+def test_model_re_review_skip_uses_origin_not_legacy_issue_title():
+    deterministic = _model_re_review_gate(
+        {"origin": "sheet_scope", "issue_type": "LLM判定：历史文案", "status": "fail"},
+        {"llm_status": "fail"},
+    )
+    llm_origin = _model_re_review_gate(
+        {"origin": "llm", "issue_type": "普通标题", "status": "fail"},
+        {"llm_status": "fail"},
+    )
+
+    assert deterministic["status"] == "passed"
+    assert llm_origin["status"] == "not_run"
+    assert llm_origin["reason"]
 
 
 @pytest.mark.asyncio

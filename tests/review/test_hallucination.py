@@ -54,6 +54,15 @@ def test_cross_validate_high_severity_no_evidence():
     assert "high_severity_no_evidence" in _cross_validate_finding(f, wb)
 
 
+def test_cross_validate_does_not_apply_sample_size_by_risk_type():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet"
+    f = _make_finding(status="fail", severity="P1", risk_type="覆盖性")
+
+    assert "coverage_claim_but_no_sample_size" not in _cross_validate_finding(f, wb)
+
+
 def test_cross_validate_excerpt_mismatch():
     wb = openpyxl.Workbook()
     ws = wb.active

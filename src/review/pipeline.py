@@ -25,7 +25,6 @@ from review.findings_review import _llm_review_findings
 from review.hallucination import (
     _build_minimal_context,
     _challenge_finding_with_llm,
-    _cross_validate_finding,
 )
 from review.llm import LLM_CALL_STATS
 from review.models import Finding, _SEVERITY_DISPLAY
@@ -33,6 +32,11 @@ from review.procedure_pairs import (
     _check_procedure_pairs,
     _check_sheet_scope,
     _llm_check_procedure_pairs,
+)
+from review.quality_gates import (
+    QualityGateContext,
+    build_quality_gate_context,
+    run_assertion_gates,
 )
 
 _logger = logging.getLogger("review.pipeline")
@@ -67,13 +71,49 @@ def _gate(
     *,
     reason: str = "",
     issues: Optional[List[str]] = None,
+    duration_ms: int | None = None,
 ) -> dict[str, object]:
     result: dict[str, object] = {"status": status}
     if reason:
         result["reason"] = reason
     if issues is not None:
         result["issues"] = list(issues)
+    if duration_ms is not None:
+        result["duration_ms"] = max(0, duration_ms)
     return result
+
+
+def _assertion_gate_ids(finding: dict, catalog: AssertionCatalog) -> list[str]:
+    assertion = catalog.maybe_assertion(
+        str(finding.get("assertion_id", "") or "")
+    ) or catalog.assertion("finding.unclassified")
+    return list(assertion.deterministic_gate_ids)
+
+
+def _model_re_review_gate(
+    finding: dict, review_result: dict | None
+) -> dict[str, object]:
+    """Record the independent model re-review without title-based inference."""
+
+    if str(finding.get("origin", "") or "").strip() == "llm":
+        return _gate(
+            "not_run",
+            reason="LLM-origin finding has no separate model verifier",
+        )
+    if not isinstance(review_result, dict):
+        return _gate(
+            "not_run", reason="model re-review produced no result for this finding"
+        )
+    reviewed_status = str(review_result.get("llm_status", "") or "")
+    finding_status = str(finding.get("status", "") or "")
+    return _gate(
+        "passed" if reviewed_status == finding_status else "flagged",
+        reason=(
+            "re-review agrees with the rule result"
+            if reviewed_status == finding_status
+            else "re-review status differs from the rule result"
+        ),
+    )
 
 
 def _emit_progress(on_progress, stage: str, current_sheet: str, findings, msg: str) -> None:
@@ -277,9 +317,15 @@ async def run_review(
     attachments_preview: Optional[Dict[str, object]] = None,
     on_progress: Optional[Callable[[dict], None]] = None,
     assertion_catalog: AssertionCatalog | None = None,
+    quality_gate_context: QualityGateContext | None = None,
 ) -> Tuple[List[dict], dict]:
     """Run the full review pipeline. Returns (findings_dicts, stats)."""
     catalog = assertion_catalog or default_assertion_catalog()
+    gate_context = quality_gate_context or build_quality_gate_context(
+        workbook=wb,
+        evidence_registry=None,
+        assertion_catalog=catalog,
+    )
     checkpoints = checkpoints or {}
     attachments = attachments if attachments is not None else attachments_preview
     attachments = attachments or {}
@@ -434,52 +480,48 @@ async def run_review(
     _emit_progress(on_progress, "findings_review", "", findings, "进入发现复核")
     review = await _llm_review_findings(wb, findings_sorted, llm, attachments=attachments)
 
-    # Cross-validation + adversarial challenge. Deterministic validation is
-    # cheap and, by default, runs for every fail/unknown finding. The LLM
-    # challenger remains deliberately bounded to P0/explicit escalations.
+    # Assertion-selected deterministic gates + adversarial challenge. The
+    # catalog determines gate applicability; direct pipeline callers without
+    # a frozen quality context receive explicit not_run records instead of an
+    # implicit attachment re-scan or false positive pass.
     deterministic_mode = _deterministic_crosscheck_mode()
     cross_issues: Dict[int, List[str]] = {}
     challenge: Dict[int, Optional[str]] = {}
-    cross_gates: Dict[int, dict[str, object]] = {}
+    deterministic_gates: Dict[int, dict[str, dict[str, object]]] = {}
     challenge_gates: Dict[int, dict[str, object]] = {}
     _emit_progress(on_progress, "hallucination", "", findings_sorted, "进入交叉验证/对抗挑战")
     for idx, f in enumerate(findings_sorted, start=1):
-        should_cross_check = (
-            f.severity == "P0"
-            or f.needs_review
-            or (deterministic_mode == "all_findings" and f.status in {"fail", "unknown"})
-            or (deterministic_mode == "p0_only" and f.status in {"fail", "unknown"})
-        )
+        gate_finding = _finding_to_dict(f, catalog)
+        gate_ids = _assertion_gate_ids(gate_finding, catalog)
         if deterministic_mode == "off":
-            cross_gates[idx] = _gate(
-                "not_run", reason="deterministic cross-check disabled by configuration"
-            )
-        elif should_cross_check and (
-            deterministic_mode == "all_findings"
-            or f.severity == "P0"
-            or f.needs_review
-        ):
-            try:
-                issues = _cross_validate_finding(f, wb)
-                cross_issues[idx] = issues
-                cross_gates[idx] = _gate(
-                    "flagged" if issues else "passed",
-                    issues=issues,
+            deterministic_gates[idx] = {
+                gate_id: _gate(
+                    "not_run",
+                    reason="deterministic gates disabled by configuration",
+                    duration_ms=0,
                 )
-            except Exception as exc:
-                cross_issues[idx] = []
-                cross_gates[idx] = _gate(
-                    "error", reason=f"{type(exc).__name__}: {exc}"
+                for gate_id in gate_ids
+            }
+        elif deterministic_mode == "p0_only" and f.severity != "P0" and not f.needs_review:
+            deterministic_gates[idx] = {
+                gate_id: _gate(
+                    "not_run",
+                    reason="p0_only policy excludes non-P0 finding",
+                    duration_ms=0,
                 )
+                for gate_id in gate_ids
+            }
         else:
-            cross_gates[idx] = _gate(
-                "not_run",
-                reason=(
-                    "p0_only policy excludes non-P0 finding"
-                    if deterministic_mode == "p0_only"
-                    else "finding status does not require deterministic cross-check"
-                ),
+            deterministic_gates[idx] = run_assertion_gates(
+                gate_finding, gate_context
             )
+        cross_issues[idx] = [
+            issue
+            for outcome in deterministic_gates[idx].values()
+            if isinstance(outcome, dict)
+            for issue in outcome.get("issues", [])
+            if isinstance(issue, str)
+        ]
 
         if f.severity == "P0":
             ws = wb[f.sheet] if f.sheet in wb.sheetnames else None
@@ -519,30 +561,9 @@ async def run_review(
         d = classify_finding(d, catalog)
         d["cross_validate_issues"] = cross_issues.get(idx, [])
         d["challenge_verdict"] = challenge.get(idx)
-        review_result = review.get(idx)
-        if str(f.issue_type or "").startswith("LLM判定："):
-            model_gate = _gate(
-                "not_run",
-                reason="LLM-origin finding has no separate model verifier",
-            )
-        elif not isinstance(review_result, dict):
-            model_gate = _gate(
-                "not_run", reason="model re-review produced no result for this finding"
-            )
-        else:
-            reviewed_status = str(review_result.get("llm_status", "") or "")
-            model_gate = _gate(
-                "passed" if reviewed_status == f.status else "flagged",
-                reason=(
-                    "re-review agrees with the rule result"
-                    if reviewed_status == f.status
-                    else "re-review status differs from the rule result"
-                ),
-            )
+        model_gate = _model_re_review_gate(d, review.get(idx))
         d["quality_gates"] = {
-            "deterministic_cross_check": cross_gates.get(
-                idx, _gate("not_run", reason="no deterministic gate record")
-            ),
+            **deterministic_gates.get(idx, {}),
             "model_re_review": model_gate,
             "adversarial_challenge": challenge_gates.get(
                 idx, _gate("not_run", reason="no adversarial gate record")

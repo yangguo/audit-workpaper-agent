@@ -46,6 +46,7 @@ from review.llm import LLM_CALL_STATS, get_review_llm
 from review.planner import build_review_plan
 from review.policy import load_policy_pack
 from review.pipeline import run_review
+from review.quality_gates import build_quality_gate_context
 from review.result_quality import build_quality_envelope
 from review.remediation import enrich_finding_quality
 from storage.findings_store import load_findings, save_findings
@@ -610,6 +611,11 @@ async def _run_review(
         LLM_CALL_STATS.clear()
         LLM_CALL_STATS.clear()
         llm = get_review_llm()
+        quality_gate_context = build_quality_gate_context(
+            workbook=wb,
+            evidence_registry=quality_registry,
+            assertion_catalog=assertion_catalog,
+        )
         findings, stats = await run_review(
             wb=wb,
             checkpoints=checkpoints,
@@ -619,6 +625,7 @@ async def _run_review(
             llm=llm,
             on_progress=_make_progress_cb(review_id),
             assertion_catalog=assertion_catalog,
+            quality_gate_context=quality_gate_context,
         )
         quality_input_findings = [dict(item) for item in findings]
         legacy_findings = [

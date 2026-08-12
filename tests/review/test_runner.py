@@ -203,6 +203,24 @@ async def test_runner_reuses_one_prebuilt_provenance_index_for_quality(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_runner_passes_prebuilt_quality_gate_context_to_pipeline(monkeypatch, tmp_path):
+    captured = []
+
+    async def _capture_context(**kwargs):
+        captured.append(kwargs["quality_gate_context"])
+        return [], {"total_findings": 0}
+
+    monkeypatch.setattr(runner, "run_review", _capture_context)
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+
+    assert len(captured) == 1
+    assert captured[0].workbook is not None
+    assert captured[0].evidence_registry is not None
+
+
+@pytest.mark.asyncio
 async def test_runner_marks_cross_finding_conflicts_before_grouping(monkeypatch, tmp_path):
     async def _conflicting_review(**kwargs):
         base = {
