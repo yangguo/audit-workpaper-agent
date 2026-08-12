@@ -200,6 +200,51 @@ async def test_runner_reuses_one_prebuilt_provenance_index_for_quality(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_runner_marks_cross_finding_conflicts_before_grouping(monkeypatch, tmp_path):
+    async def _conflicting_review(**kwargs):
+        base = {
+            "issue_type": "受控附件存在性声明",
+            "severity": "P1",
+            "status": "fail",
+            "sheet": "SA-4c",
+            "cell": "A1",
+            "origin": "attachment_reference",
+            "rule_hint": "attachment_reference_missing",
+            "assertion_id": "attachment.inventory.presence",
+            "claim_type": "attachment_presence",
+            "claim_subject": "SA-4c|attachment:backup.docx",
+            "evidence_refs": [
+                {
+                    "sheet": "SA-4c",
+                    "cell_or_range": "A1",
+                    "excerpt": "管理员账号识别情况",
+                }
+            ],
+            "quality_gates": {},
+        }
+        return [
+            {**base, "claim_value": "present"},
+            {**base, "claim_value": "absent"},
+        ], {"total_findings": 2}
+
+    monkeypatch.setattr(runner, "run_review", _conflicting_review)
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    payload = load_findings(review_id)
+    assert payload is not None
+    assert payload["stats"]["quality"]["consistency"]["total_conflicts"] == 1
+    assert {
+        finding["quality"]["consistency"]["status"]
+        for finding in payload["findings"]
+    } == {"conflicted"}
+    assert {
+        finding["quality"]["gates"]["cross_finding_consistency"]["status"]
+        for finding in payload["findings"]
+    } == {"flagged"}
+
+
+@pytest.mark.asyncio
 async def test_execution_manifest_records_assertion_catalog_component(tmp_path):
     review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
 

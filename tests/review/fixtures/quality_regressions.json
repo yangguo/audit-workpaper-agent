@@ -1,0 +1,40 @@
+{
+  "findings": [
+    {
+      "finding_id": "f-present",
+      "assertion_id": "attachment.inventory.presence",
+      "claim_type": "attachment_presence",
+      "claim_subject": "SA-11|attachment:backup.docx",
+      "claim_value": "present",
+      "status": "fail",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "f-absent",
+      "assertion_id": "attachment.inventory.presence",
+      "claim_type": "attachment_presence",
+      "claim_subject": "SA-11|attachment:backup.docx",
+      "claim_value": "absent",
+      "status": "fail",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "f-other-subject",
+      "assertion_id": "attachment.inventory.presence",
+      "claim_type": "attachment_presence",
+      "claim_subject": "SA-11|attachment:logs.docx",
+      "claim_value": "absent",
+      "status": "fail",
+      "severity": "P1"
+    },
+    {
+      "finding_id": "f-other-assertion",
+      "assertion_id": "record.period_date.consistency",
+      "claim_type": "period_date",
+      "claim_subject": "SA-11|attachment:backup.docx",
+      "claim_value": "date_mismatch",
+      "status": "fail",
+      "severity": "P1"
+    }
+  ]
+}

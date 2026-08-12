@@ -33,6 +33,7 @@ from review.evidence_provenance import EvidenceProvenanceIndex, verify_finding_e
 from review.evidence_facts import EvidenceFactRegistry, evaluate_claim_support
 from review.evaluators import execute_policy_plan
 from review.finding_comparison import compare_finding_sets
+from review.finding_consistency import annotate_finding_consistency
 from review.findings import build_v2_findings, project_v2_findings_to_v1
 from review.finding_taxonomy import (
     AssertionCatalog,
@@ -636,6 +637,21 @@ async def _run_review(
                 assertion_catalog=assertion_catalog,
             )
             if quality_stats.get("mode") != "off":
+                findings, consistency_conflicts = annotate_finding_consistency(
+                    findings,
+                    input_set_sha256=str(
+                        quality_stats.get("input_set_sha256", "") or ""
+                    ),
+                    catalog=assertion_catalog,
+                    quality_mode=quality_stats["mode"],
+                )
+                quality_stats["consistency"] = {
+                    "conflicts": [
+                        conflict.model_dump(mode="json")
+                        for conflict in consistency_conflicts
+                    ],
+                    "total_conflicts": len(consistency_conflicts),
+                }
                 findings, grouping_stats = enrich_finding_quality(
                     findings,
                     input_sha256=str(quality_stats.get("input_sha256", "") or ""),

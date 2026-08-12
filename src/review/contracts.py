@@ -21,6 +21,7 @@ QualityGateStatus = Literal["passed", "flagged", "not_run", "error"]
 ClaimSupportStatus = Literal[
     "supported", "partial", "unsupported", "not_required", "error"
 ]
+ConsistencyStatus = Literal["consistent", "conflicted", "not_comparable"]
 
 
 class InputFile(BaseModel):
@@ -105,6 +106,24 @@ class QualityDisposition(BaseModel):
     original_status: str = ""
     effective_status: str = ""
     original_severity: str = ""
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class FindingConflict(BaseModel):
+    conflict_id: str = Field(min_length=1, max_length=128)
+    conflict_type: Literal[
+        "exclusive_claim_values", "status_disagreement", "support_contradiction"
+    ]
+    finding_ids: list[str] = Field(default_factory=list, min_length=2)
+    assertion_id: str = ""
+    claim_subject: str = ""
+    values: list[str] = Field(default_factory=list)
+
+
+class FindingConsistency(BaseModel):
+    status: ConsistencyStatus = "not_comparable"
+    conflict_ids: list[str] = Field(default_factory=list)
+    related_finding_ids: list[str] = Field(default_factory=list)
     reason_codes: list[str] = Field(default_factory=list)
 
 

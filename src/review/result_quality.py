@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from review.contracts import (
     CitationValidationStatus,
     ClaimSupport,
+    FindingConsistency,
     QualityDisposition,
     QualityGateStatus,
 )
@@ -107,6 +108,7 @@ class FindingQuality(BaseModel):
     )
     claim_support: ClaimSupport = Field(default_factory=ClaimSupport)
     disposition: QualityDisposition = Field(default_factory=QualityDisposition)
+    consistency: FindingConsistency = Field(default_factory=FindingConsistency)
     gates: dict[str, GateOutcome] = Field(default_factory=dict)
     provenance: FindingProvenance = Field(default_factory=FindingProvenance)
     grouping: FindingGrouping = Field(default_factory=FindingGrouping)
