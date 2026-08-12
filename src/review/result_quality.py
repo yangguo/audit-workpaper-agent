@@ -8,7 +8,12 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from review.contracts import CitationValidationStatus, QualityGateStatus
+from review.contracts import (
+    CitationValidationStatus,
+    ClaimSupport,
+    QualityDisposition,
+    QualityGateStatus,
+)
 
 
 _REF_KEYS = {
@@ -66,6 +71,7 @@ class FindingProvenance(BaseModel):
     execution_sha256: str = ""
     engine_version: str = ""
     policy_pack: dict[str, str] | None = None
+    assertion_catalog: dict[str, str] | None = None
 
 
 class FindingGrouping(BaseModel):
@@ -93,12 +99,14 @@ class FindingQuality(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = "review-quality/1"
+    schema_version: str = "review-quality/2"
     finding_id: str
     primary_location: PrimaryLocation | None = None
     citation_validation: CitationValidation = Field(
         default_factory=CitationValidation
     )
+    claim_support: ClaimSupport = Field(default_factory=ClaimSupport)
+    disposition: QualityDisposition = Field(default_factory=QualityDisposition)
     gates: dict[str, GateOutcome] = Field(default_factory=dict)
     provenance: FindingProvenance = Field(default_factory=FindingProvenance)
     grouping: FindingGrouping = Field(default_factory=FindingGrouping)
@@ -254,6 +262,9 @@ def build_quality_envelope(
     execution_sha256: str = "",
     engine_version: str = "",
     policy_pack: Mapping[str, str] | None = None,
+    assertion_catalog: Mapping[str, str] | None = None,
+    claim_support: Mapping[str, Any] | None = None,
+    disposition: Mapping[str, Any] | None = None,
     verified_refs: Iterable[Mapping[str, Any]] | None = None,
     rejected_count: int = 0,
     rejection_codes: Iterable[str] | None = None,
@@ -303,6 +314,23 @@ def build_quality_envelope(
             evidence_ids=evidence_ids,
             verified_refs=refs,
         ),
+        claim_support=ClaimSupport.model_validate(
+            claim_support
+            or {
+                "status": "not_required",
+                "assertion_id": _string(finding.get("assertion_id")),
+                "claim_type": _string(finding.get("claim_type")),
+            }
+        ),
+        disposition=QualityDisposition.model_validate(
+            disposition
+            or {
+                "original_status": _string(finding.get("status")),
+                "effective_status": _string(finding.get("status")),
+                "original_severity": _string(finding.get("severity")),
+                "reason_codes": [],
+            }
+        ),
         gates={
             str(name): GateOutcome.model_validate(value)
             for name, value in (gates or {}).items()
@@ -313,6 +341,7 @@ def build_quality_envelope(
             execution_sha256=_string(execution_sha256),
             engine_version=_string(engine_version),
             policy_pack=(dict(policy_pack) if policy_pack else None),
+            assertion_catalog=(dict(assertion_catalog) if assertion_catalog else None),
         ),
         grouping=FindingGrouping.model_validate(grouping or {}),
         remediation=RemediationState.model_validate(remediation or {}),

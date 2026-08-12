@@ -145,7 +145,7 @@ def test_build_quality_envelope_is_additive_and_explicit_about_gate_states():
         verified_refs=finding["evidence_refs"],
     )
 
-    assert quality["schema_version"] == "review-quality/1"
+    assert quality["schema_version"] == "review-quality/2"
     assert quality["finding_id"].startswith("legacy:")
     assert quality["primary_location"]["cell_or_range"] == "C5"
     assert quality["citation_validation"]["status"] == "verified"
@@ -155,6 +155,13 @@ def test_build_quality_envelope_is_additive_and_explicit_about_gate_states():
     assert quality["citation_validation"]["evidence_ids"] == ["cell:1"]
     assert quality["citation_validation"]["verified_refs"][0]["evidence_id"] == "cell:1"
     assert quality["gates"]["model_re_review"]["status"] == "not_run"
+    assert quality["claim_support"]["status"] == "not_required"
+    assert quality["disposition"] == {
+        "original_status": "fail",
+        "effective_status": "fail",
+        "original_severity": "P1",
+        "reason_codes": [],
+    }
 
 
 def test_finding_quality_rejects_unknown_gate_status():

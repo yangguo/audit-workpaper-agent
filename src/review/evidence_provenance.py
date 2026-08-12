@@ -60,6 +60,8 @@ class _AttachmentCandidate:
     content_hash: str
     source_sha256: str
     physical_path: Path | None
+    extraction_status: str
+    source_type: str
 
 
 class EvidenceProvenanceIndex:
@@ -181,6 +183,12 @@ class EvidenceProvenanceIndex:
                 content_hash=_digest(text),
                 source_sha256=source_sha256,
                 physical_path=physical,
+                extraction_status=(
+                    _text(_field(item, "extraction_status"))
+                    or _text(_field(item, "status"))
+                    or "unknown"
+                ),
+                source_type=_text(self.attachments.get("source_type")) or "unknown",
             )
             self._attachments_by_path.setdefault(normalized, []).append(candidate)
             parts = normalized.split("/")
@@ -188,6 +196,65 @@ class EvidenceProvenanceIndex:
                 suffix = "/".join(parts[start:])
                 self._attachments_by_path.setdefault(suffix, []).append(candidate)
             self._attachments_by_filename.setdefault(Path(normalized).name, []).append(candidate)
+
+    @staticmethod
+    def _attachment_evidence_id(candidate: _AttachmentCandidate) -> str:
+        return "attachment:" + _digest(
+            candidate.logical_path + ":" + candidate.content_hash
+        )[:32]
+
+    def snapshot_records(self) -> list[dict[str, Any]]:
+        """Return precomputed source identities without rereading mutable inputs.
+
+        Consumers use these records to derive evidence facts.  No file-system
+        walk or re-hash happens here: construction already pinned the cell and
+        attachment identity used by citation verification.
+        """
+
+        records: list[dict[str, Any]] = []
+        sheet_names = {
+            _normalize_sheet_id(sheet.name): sheet.name for sheet in self.graph.sheets
+        }
+        for (sheet_key, coordinate), cell in sorted(self._cells.items()):
+            sheet_name = sheet_names.get(sheet_key, sheet_key)
+            records.append(
+                {
+                    "fact_id": cell.evidence_id,
+                    "fact_type": "cell",
+                    "source_ref": f"workpaper:{sheet_name}!{coordinate}",
+                    "source_sha256": self.graph.source_sha256,
+                    "content_hash": cell.content_hash,
+                    "sheet_scope": [sheet_name] if sheet_name else [],
+                    "extraction_status": "ok",
+                    "source_type": "workpaper",
+                }
+            )
+
+        attachment_candidates: dict[str, _AttachmentCandidate] = {}
+        for candidates in self._attachments_by_path.values():
+            for candidate in candidates:
+                attachment_candidates.setdefault(
+                    _normalize_rel_path(candidate.logical_path), candidate
+                )
+        for key, candidate in sorted(attachment_candidates.items()):
+            scope = sorted(
+                sheet_names.get(sheet_key, sheet_key)
+                for sheet_key, paths in self._allowed_by_sheet.items()
+                if key in paths
+            )
+            records.append(
+                {
+                    "fact_id": self._attachment_evidence_id(candidate),
+                    "fact_type": "attachment",
+                    "source_ref": candidate.logical_path,
+                    "source_sha256": candidate.source_sha256,
+                    "content_hash": candidate.content_hash,
+                    "sheet_scope": scope,
+                    "extraction_status": candidate.extraction_status,
+                    "source_type": candidate.source_type,
+                }
+            )
+        return records
 
     def _cell_ref(
         self,
@@ -259,6 +326,29 @@ class EvidenceProvenanceIndex:
             except OSError:
                 return None, "content_mismatch"
         excerpt = _text(raw.get("excerpt") or raw.get("quote"))
+        # A uniquely matched, in-scope frozen file can prove that the file
+        # exists even when it has no extractable text. It deliberately carries
+        # no offsets/quote, so claim support may use it only for presence; text,
+        # date and configuration claims still require a verified excerpt below.
+        if (
+            candidate.source_type == "directory"
+            and candidate.source_sha256
+            and (not candidate.text or not excerpt)
+        ):
+            accepted = dict(raw)
+            accepted.update(
+                {
+                    "sheet": sheet,
+                    "source_kind": "attachment",
+                    "source_ref": candidate.logical_path,
+                    "attachment": candidate.logical_path,
+                    "source_sha256": candidate.source_sha256,
+                    "content_hash": candidate.content_hash,
+                    "evidence_id": self._attachment_evidence_id(candidate),
+                    "verification_scope": "presence_only",
+                }
+            )
+            return accepted, None
         if not candidate.text:
             return None, "source_text_unavailable"
         occurrences = candidate.text.count(excerpt) if excerpt else 0
@@ -276,7 +366,7 @@ class EvidenceProvenanceIndex:
                 "attachment": candidate.logical_path,
                 "source_sha256": candidate.source_sha256,
                 "content_hash": candidate.content_hash,
-                "evidence_id": f"attachment:{_digest(candidate.logical_path + ":" + candidate.content_hash)[:32]}",
+                "evidence_id": self._attachment_evidence_id(candidate),
                 "start_offset": start,
                 "end_offset": start + len(excerpt),
             }

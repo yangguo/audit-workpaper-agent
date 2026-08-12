@@ -18,6 +18,9 @@ CitationValidationStatus = Literal[
     "verified", "partial", "invalid", "not_available"
 ]
 QualityGateStatus = Literal["passed", "flagged", "not_run", "error"]
+ClaimSupportStatus = Literal[
+    "supported", "partial", "unsupported", "not_required", "error"
+]
 
 
 class InputFile(BaseModel):
@@ -66,6 +69,43 @@ class ExecutionComponentRef(BaseModel):
     component_id: str = Field(min_length=1, max_length=120)
     version: str = Field(min_length=1, max_length=80)
     sha256: str = Field(min_length=1, max_length=128)
+
+
+class EvidenceFact(BaseModel):
+    """Minimal immutable identity for a source available to a review."""
+
+    fact_id: str = Field(min_length=1, max_length=256)
+    fact_type: Literal["cell", "attachment"]
+    source_ref: str = Field(min_length=1, max_length=1_000)
+    source_sha256: str = Field(default="", max_length=128)
+    content_hash: str = Field(default="", max_length=128)
+    sheet_scope: list[str] = Field(default_factory=list, max_length=200)
+    extraction_status: str = Field(default="unknown", max_length=80)
+    # Directory sources are frozen files; previews only declare that an
+    # attachment was received and cannot prove the file/content assertion.
+    source_type: Literal["workpaper", "directory", "preview", "unknown"] = (
+        "unknown"
+    )
+
+
+class ClaimSupport(BaseModel):
+    """Whether verified sources support one controlled finding claim."""
+
+    status: ClaimSupportStatus = "not_required"
+    assertion_id: str = ""
+    claim_type: str = ""
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    missing_requirements: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class QualityDisposition(BaseModel):
+    """Audit record of any shadow/on quality decision."""
+
+    original_status: str = ""
+    effective_status: str = ""
+    original_severity: str = ""
+    reason_codes: list[str] = Field(default_factory=list)
 
 
 class CellEvidence(BaseModel):

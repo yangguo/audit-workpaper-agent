@@ -131,6 +131,33 @@ def test_changed_attachment_snapshot_fails_closed(tmp_path):
     assert "content_mismatch" in result.rejection_codes
 
 
+def test_snapshot_records_expose_precomputed_minimal_fact_identity(tmp_path):
+    attachments_root = tmp_path / "attachments"
+    attachments_root.mkdir()
+    (attachments_root / "policy.txt").write_text("minimum password length: 8", encoding="utf-8")
+    workbook = _workbook_with_sheet("请参阅 policy.txt")
+    graph = build_evidence_graph(workbook, source_sha256="workpaper-sha")
+    index = EvidenceProvenanceIndex(
+        graph,
+        attachments=build_attachment_index(str(attachments_root)),
+        workbook=workbook,
+    )
+
+    records = index.snapshot_records()
+    cell = next(record for record in records if record["fact_type"] == "cell")
+    attachment = next(
+        record
+        for record in records
+        if record["fact_type"] == "attachment" and record["source_ref"] == "policy.txt"
+    )
+
+    assert cell["source_type"] == "workpaper"
+    assert cell["source_sha256"] == "workpaper-sha"
+    assert attachment["source_type"] == "directory"
+    assert attachment["source_sha256"]
+    assert attachment["sheet_scope"] == ["SA-1"]
+
+
 def test_fail_without_verified_evidence_is_downgraded_to_unknown():
     workbook = _workbook_with_sheet()
     graph = build_evidence_graph(workbook, source_sha256="workpaper-sha")

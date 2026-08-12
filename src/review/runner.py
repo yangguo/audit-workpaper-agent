@@ -30,6 +30,7 @@ from review.execution_context import (
     component_ref_from_path,
 )
 from review.evidence_provenance import EvidenceProvenanceIndex, verify_finding_evidence
+from review.evidence_facts import EvidenceFactRegistry, evaluate_claim_support
 from review.evaluators import execute_policy_plan
 from review.finding_comparison import compare_finding_sets
 from review.findings import build_v2_findings, project_v2_findings_to_v1
@@ -171,6 +172,9 @@ def _attach_result_quality(
     file_path: str,
     attachments: Optional[dict[str, object]],
     execution_context: ReviewExecutionContext | None = None,
+    evidence_index: EvidenceProvenanceIndex | None = None,
+    evidence_registry: EvidenceFactRegistry | None = None,
+    assertion_catalog: AssertionCatalog | None = None,
 ) -> tuple[list[dict], dict]:
     """Attach quality metadata while preserving legacy V1 by default."""
     mode = _result_quality_config()
@@ -184,12 +188,16 @@ def _attach_result_quality(
         }
 
     source_sha256 = _workpaper_sha256(execution_context) or sha256_file(file_path)
-    graph = build_evidence_graph(workbook, source_sha256=source_sha256)
-    index = EvidenceProvenanceIndex(
-        graph,
-        attachments=attachments or {},
-        workbook=workbook,
-    )
+    index = evidence_index
+    if index is None:
+        graph = build_evidence_graph(workbook, source_sha256=source_sha256)
+        index = EvidenceProvenanceIndex(
+            graph,
+            attachments=attachments or {},
+            workbook=workbook,
+        )
+    registry = evidence_registry or EvidenceFactRegistry.from_provenance(index)
+    catalog = assertion_catalog or fallback_assertion_catalog()
     engine_version = (
         execution_context.manifest.engine_version
         if execution_context is not None
@@ -202,6 +210,7 @@ def _attach_result_quality(
     gate_counts: dict[str, dict[str, int]] = {}
     rejected_refs = 0
     downgraded_findings = 0
+    claim_support_counts: dict[str, int] = {}
     enriched: list[dict] = []
     for finding in findings:
         original = dict(finding)
@@ -209,8 +218,44 @@ def _attach_result_quality(
         checked, verification = verify_finding_evidence(original, index)
         checked.pop("quality_gates", None)
         output = checked if mode == "on" else original
+        assertion = catalog.maybe_assertion(str(original.get("assertion_id", "") or ""))
+        if assertion is None:
+            claim_support = {
+                "status": "error",
+                "assertion_id": str(original.get("assertion_id", "") or ""),
+                "claim_type": str(original.get("claim_type", "") or ""),
+                "supporting_evidence_ids": [],
+                "missing_requirements": ["known_assertion"],
+                "reason_codes": ["assertion_not_in_catalog"],
+            }
+        else:
+            claim_support = evaluate_claim_support(
+                finding=original,
+                assertion=assertion,
+                verified_refs=verification.accepted_refs,
+                registry=registry,
+            ).model_dump(mode="json")
+        claim_status = str(claim_support.get("status", "error") or "error")
+        claim_support_counts[claim_status] = claim_support_counts.get(claim_status, 0) + 1
+        disposition_reasons: list[str] = []
         if mode == "on" and checked.get("status") != original.get("status"):
             downgraded_findings += 1
+            disposition_reasons.append("citation_validation_downgrade")
+        if (
+            mode == "on"
+            and str(original.get("status", "") or "") == "fail"
+            and claim_status in {"partial", "unsupported", "error"}
+        ):
+            output = dict(output)
+            output["status"] = "unknown"
+            output["severity"] = "P2"
+            output["unknown_reason"] = (
+                "已验证引用不足以支持该受控声明，已降级为不确定；"
+                + ",".join(claim_support.get("reason_codes", [])[:3])
+            )
+            disposition_reasons.append(f"claim_support_{claim_status}")
+            if output.get("status") != original.get("status") and not disposition_reasons[:-1]:
+                downgraded_findings += 1
         quality = build_quality_envelope(
             output,
             input_sha256=source_sha256,
@@ -221,6 +266,14 @@ def _attach_result_quality(
                 execution_context.execution_sha256 if execution_context else ""
             ),
             engine_version=engine_version,
+            assertion_catalog={"id": catalog.id, "version": catalog.version},
+            claim_support=claim_support,
+            disposition={
+                "original_status": str(original.get("status", "") or ""),
+                "effective_status": str(output.get("status", "") or ""),
+                "original_severity": str(original.get("severity", "") or ""),
+                "reason_codes": disposition_reasons,
+            },
             verified_refs=verification.accepted_refs,
             rejected_count=verification.rejected_count,
             rejection_codes=verification.rejection_codes,
@@ -256,6 +309,7 @@ def _attach_result_quality(
         ),
         "engine_version": engine_version,
         "gate_status": gate_counts,
+        "claim_support": claim_support_counts,
     }
 
 
@@ -529,6 +583,29 @@ async def _run_review(
         # review artifact directory.
         if attachments:
             attachments["review_id"] = review_id
+        quality_index: EvidenceProvenanceIndex | None = None
+        quality_registry: EvidenceFactRegistry | None = None
+        if _result_quality_config() != "off":
+            try:
+                quality_source_sha256 = (
+                    _workpaper_sha256(execution_context) or sha256_file(pinned_file_path)
+                )
+                quality_graph = build_evidence_graph(
+                    wb, source_sha256=quality_source_sha256
+                )
+                quality_index = EvidenceProvenanceIndex(
+                    quality_graph,
+                    attachments=attachments,
+                    workbook=wb,
+                )
+                quality_registry = EvidenceFactRegistry.from_provenance(
+                    quality_index
+                )
+            except Exception:
+                # Quality remains additive: V1 execution continues and the
+                # later quality capture records the independently observable
+                # error if its fallback construction also fails.
+                _logger.exception("review quality source index %s failed", review_id)
         LLM_CALL_STATS.clear()
         LLM_CALL_STATS.clear()
         llm = get_review_llm()
@@ -554,6 +631,9 @@ async def _run_review(
                 file_path=pinned_file_path,
                 attachments=attachments,
                 execution_context=execution_context,
+                evidence_index=quality_index,
+                evidence_registry=quality_registry,
+                assertion_catalog=assertion_catalog,
             )
             if quality_stats.get("mode") != "off":
                 findings, grouping_stats = enrich_finding_quality(

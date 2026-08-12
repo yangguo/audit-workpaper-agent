@@ -136,7 +136,7 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
     payload = load_findings(review_id)
     assert payload is not None
     finding = payload["findings"][0]
-    assert finding["quality"]["schema_version"] == "review-quality/1"
+    assert finding["quality"]["schema_version"] == "review-quality/2"
     assert finding["quality"]["provenance"]["input_sha256"]
     assert finding["quality"]["finding_id"].startswith("legacy:")
     assert finding["origin"] == "sheet_scope"
@@ -148,6 +148,9 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
         "not_available",
     }
     assert "grouping" in finding["quality"]
+    assert finding["quality"]["claim_support"]["status"] == "unsupported"
+    assert finding["quality"]["disposition"]["original_status"] == "fail"
+    assert finding["quality"]["disposition"]["effective_status"] == "fail"
     assert finding["quality"]["grouping"]["root_cause_id"]
     assert finding["quality"]["remediation"]["status"] in {
         "actionable",
@@ -156,6 +159,44 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
     }
     assert payload["stats"]["quality"]["raw_findings"] == len(payload["findings"])
     assert finding["issue_type"] == "特权账号识别范围可能不完整"
+
+
+@pytest.mark.asyncio
+async def test_quality_on_downgrades_claim_without_required_support(tmp_path, monkeypatch):
+    monkeypatch.setenv("REVIEW_RESULT_QUALITY_MODE", "on")
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    payload = load_findings(review_id)
+    assert payload is not None
+    finding = payload["findings"][0]
+
+    assert finding["status"] == "unknown"
+    assert finding["quality"]["claim_support"]["status"] == "unsupported"
+    assert finding["quality"]["disposition"] == {
+        "original_status": "fail",
+        "effective_status": "unknown",
+        "original_severity": "P1",
+        "reason_codes": ["citation_validation_downgrade", "claim_support_unsupported"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_runner_reuses_one_prebuilt_provenance_index_for_quality(monkeypatch, tmp_path):
+    created = []
+    original_index = runner.EvidenceProvenanceIndex
+
+    class _SpyIndex(original_index):
+        def __init__(self, *args, **kwargs):
+            created.append((args, kwargs))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "EvidenceProvenanceIndex", _SpyIndex)
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+
+    assert len(created) == 1
 
 
 @pytest.mark.asyncio
