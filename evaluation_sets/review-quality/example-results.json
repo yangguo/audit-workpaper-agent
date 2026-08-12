@@ -1,0 +1,174 @@
+{
+  "v1": {
+    "synthetic-attachment-reference": [
+      {
+        "finding_id": "finding:synthetic-attachment-reference",
+        "issue_type": "synthetic attachment reference mismatch",
+        "assertion_id": "attachment.reference.mapping",
+        "claim_subject": "SA-1|attachment:backup-evidence.txt",
+        "scope_key": "SA-1",
+        "sheet": "SA-1",
+        "cell": "C5",
+        "status": "fail",
+        "severity": "P1",
+        "quality": {
+          "schema_version": "review-quality/2",
+          "finding_id": "finding:synthetic-attachment-reference",
+          "primary_location": {
+            "source_kind": "cell",
+            "sheet": "SA-1",
+            "cell_or_range": "C5"
+          },
+          "citation_validation": {
+            "status": "verified",
+            "evidence_ids": ["cell:synthetic:SA-1:C5"]
+          },
+          "claim_support": {"status": "supported"},
+          "disposition": {"effective_status": "fail"},
+          "consistency": {"status": "consistent"},
+          "gates": {"deterministic_cross_check": {"status": "passed"}},
+          "provenance": {
+            "input_sha256": "synthetic-input-sha256",
+            "input_set_sha256": "synthetic-input-set-sha256",
+            "execution_sha256": "synthetic-execution-sha256"
+          },
+          "grouping": {"duplicate_of": null},
+          "remediation": {
+            "status": "actionable",
+            "action": "Correct the attachment reference and retain the mapped evidence.",
+            "required_evidence": ["updated attachment mapping"],
+            "acceptance_criteria": ["independent reviewer confirms the mapping"]
+          }
+        }
+      }
+    ]
+  },
+  "v2": {
+    "synthetic-attachment-reference": [
+      {
+        "finding_id": "finding:synthetic-attachment-reference",
+        "issue_type": "synthetic attachment reference mismatch",
+        "assertion_id": "attachment.reference.mapping",
+        "claim_subject": "SA-1|attachment:backup-evidence.txt",
+        "scope_key": "SA-1",
+        "sheet": "SA-1",
+        "cell": "C5",
+        "status": "fail",
+        "severity": "P1",
+        "quality": {
+          "schema_version": "review-quality/2",
+          "finding_id": "finding:synthetic-attachment-reference",
+          "primary_location": {
+            "source_kind": "cell",
+            "sheet": "SA-1",
+            "cell_or_range": "C5"
+          },
+          "citation_validation": {
+            "status": "verified",
+            "evidence_ids": ["cell:synthetic:SA-1:C5"]
+          },
+          "claim_support": {"status": "supported"},
+          "disposition": {"effective_status": "fail"},
+          "consistency": {"status": "consistent"},
+          "gates": {"deterministic_cross_check": {"status": "passed"}},
+          "provenance": {
+            "input_sha256": "synthetic-input-sha256",
+            "input_set_sha256": "synthetic-input-set-sha256",
+            "execution_sha256": "synthetic-execution-sha256"
+          },
+          "grouping": {"duplicate_of": null},
+          "remediation": {
+            "status": "actionable",
+            "action": "Correct the attachment reference and retain the mapped evidence.",
+            "required_evidence": ["updated attachment mapping"],
+            "acceptance_criteria": ["independent reviewer confirms the mapping"]
+          }
+        }
+      }
+    ]
+  },
+  "repeated_runs": {
+    "synthetic-attachment-reference": [
+      [
+        {
+          "finding_id": "finding:synthetic-attachment-reference-run-1",
+          "assertion_id": "attachment.reference.mapping",
+          "claim_subject": "SA-1|attachment:backup-evidence.txt",
+          "scope_key": "SA-1",
+          "sheet": "SA-1",
+          "status": "fail",
+          "severity": "P1",
+          "quality": {
+            "schema_version": "review-quality/2",
+            "citation_validation": {"status": "verified", "evidence_ids": ["cell:synthetic:SA-1:C5"]},
+            "provenance": {"input_set_sha256": "synthetic-input-set-sha256", "execution_sha256": "synthetic-execution-sha256"}
+          }
+        }
+      ],
+      [
+        {
+          "finding_id": "finding:synthetic-attachment-reference-run-2",
+          "assertion_id": "attachment.reference.mapping",
+          "claim_subject": "SA-1|attachment:backup-evidence.txt",
+          "scope_key": "SA-1",
+          "sheet": "SA-1",
+          "status": "fail",
+          "severity": "P1",
+          "quality": {
+            "schema_version": "review-quality/2",
+            "citation_validation": {"status": "verified", "evidence_ids": ["cell:synthetic:SA-1:C5"]},
+            "provenance": {"input_set_sha256": "synthetic-input-set-sha256", "execution_sha256": "synthetic-execution-sha256"}
+          }
+        }
+      ],
+      [
+        {
+          "finding_id": "finding:synthetic-attachment-reference-run-3",
+          "assertion_id": "attachment.reference.mapping",
+          "claim_subject": "SA-1|attachment:backup-evidence.txt",
+          "scope_key": "SA-1",
+          "sheet": "SA-1",
+          "status": "fail",
+          "severity": "P1",
+          "quality": {
+            "schema_version": "review-quality/2",
+            "citation_validation": {"status": "verified", "evidence_ids": ["cell:synthetic:SA-1:C5"]},
+            "provenance": {"input_set_sha256": "synthetic-input-set-sha256", "execution_sha256": "synthetic-execution-sha256"}
+          }
+        }
+      ],
+      [
+        {
+          "finding_id": "finding:synthetic-attachment-reference-run-4",
+          "assertion_id": "attachment.reference.mapping",
+          "claim_subject": "SA-1|attachment:backup-evidence.txt",
+          "scope_key": "SA-1",
+          "sheet": "SA-1",
+          "status": "fail",
+          "severity": "P1",
+          "quality": {
+            "schema_version": "review-quality/2",
+            "citation_validation": {"status": "verified", "evidence_ids": ["cell:synthetic:SA-1:C5"]},
+            "provenance": {"input_set_sha256": "synthetic-input-set-sha256", "execution_sha256": "synthetic-execution-sha256"}
+          }
+        }
+      ],
+      [
+        {
+          "finding_id": "finding:synthetic-attachment-reference-run-5",
+          "assertion_id": "attachment.reference.mapping",
+          "claim_subject": "SA-1|attachment:backup-evidence.txt",
+          "scope_key": "SA-1",
+          "sheet": "SA-1",
+          "status": "fail",
+          "severity": "P1",
+          "quality": {
+            "schema_version": "review-quality/2",
+            "citation_validation": {"status": "verified", "evidence_ids": ["cell:synthetic:SA-1:C5"]},
+            "provenance": {"input_set_sha256": "synthetic-input-set-sha256", "execution_sha256": "synthetic-execution-sha256"}
+          }
+        }
+      ]
+    ]
+  }
+}

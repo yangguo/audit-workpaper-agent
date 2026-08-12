@@ -29,7 +29,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--results",
         type=Path,
-        help="JSON object mapping case_id to finding arrays",
+        help=(
+            "legacy {case_id: findings} or "
+            "{v1: ..., v2: ..., repeated_runs: ...} JSON results"
+        ),
     )
     parser.add_argument("--output", type=Path, help="optional metrics output JSON")
     args = parser.parse_args(argv)
@@ -44,7 +47,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     v2_results = results.get("v2") if isinstance(results.get("v2"), dict) else None
     v1_results = results.get("v1") if isinstance(results.get("v1"), dict) else results
-    report = evaluate_quality_cases(manifest, v1_results, v2_by_case=v2_results)
+    repeated_runs = (
+        results.get("repeated_runs")
+        if isinstance(results.get("repeated_runs"), dict)
+        else None
+    )
+    report = evaluate_quality_cases(
+        manifest,
+        v1_results,
+        v2_by_case=v2_results,
+        repeated_runs_by_case=repeated_runs,
+    )
     encoded = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(encoded + "\n", encoding="utf-8")

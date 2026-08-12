@@ -1,20 +1,30 @@
 {
-  "schema_version": "review-quality/1",
+  "schema_version": "review-quality/2",
   "cases": [
     {
-      "case_id": "synthetic-cell-and-unknown",
-      "input_sha256": "replace-with-approved-fixture-sha256",
-      "adjudication_status": "pending",
+      "case_id": "synthetic-attachment-reference",
+      "input_sha256": "synthetic-input-sha256",
+      "input_set_sha256": "synthetic-input-set-sha256",
+      "execution_sha256": "synthetic-execution-sha256",
+      "minimum_runs": 5,
+      "adjudication_status": "adjudicated",
       "expected_findings": [
         {
           "match_key": {
-            "issue_type": "覆盖性",
-            "sheet": "SA-1",
-            "cell": "C5"
+            "assertion_id": "attachment.reference.mapping",
+            "claim_subject": "SA-1|attachment:backup-evidence.txt",
+            "scope_key": "SA-1"
           },
           "status": "fail",
           "severity": "P1",
-          "evidence_ids": ["cell:synthetic:SA-1:C5"],
+          "allowed_evidence_ids": ["cell:synthetic:SA-1:C5"],
+          "requires_attachment_support": true,
+          "expected_duplicate_of": null,
+          "expected_conflict": false,
+          "expected_remediation": {
+            "required": true,
+            "status": "actionable"
+          },
           "primary_location": {
             "source_kind": "cell",
             "sheet": "SA-1",

@@ -103,6 +103,8 @@ V1 finding 保存前，系统会在冻结输入上附加 `quality`：
 | `finding_id` | 基于输入 hash、问题类型、定位、状态和证据身份生成的稳定 ID |
 | `primary_location` | 优先使用已验证的 Sheet/单元格；没有单元格时明确标记附件或未定位 |
 | `citation_validation` | `verified`、`partial`、`invalid` 或 `not_available`，并记录拒绝原因 |
+| `claim_support` | 已验证证据是否支持该 assertion/claim；附件型 fail 结论必须有受控支持 |
+| `consistency` | 同一执行内受控 claim 是否冲突；`conflicted` 是可发布结论的阻断信号 |
 | `gates` | 每个复核步骤的 `passed`、`flagged`、`not_run` 或 `error` |
 | `provenance` | 输入 SHA256、引擎版本和策略包版本 |
 | `grouping` | 根因编号、严格重复关系和相关 finding ID |
@@ -209,14 +211,40 @@ uv run python scripts/evaluate_review_quality.py \
   --results /path/to/results-by-case.json
 ```
 
-缺少人工裁决或任一质量门禁失败时，命令返回非零状态；`promotion_ready=true` 只是
-允许进入 V1/V2 对照审阅，不代表可以自动切换 V2。
+旧版平铺 `{case_id: [...]}` 输入仍会计算基线 finding / citation 指标，但永远不能
+`promotion_ready`。用于推广的 `review-quality/2` 输入必须同时提供 V1、V2 及同一
+execution identity 下至少五次的重复运行：
 
-发布门禁固定要求：每个 finding 的 `quality.provenance.input_sha256` 必须与 gold-set
-case 一致，引用复现率为 100%，没有人工裁决的 case 不能推广，`not_run` 不能编码成
-`passed`，且提供 V2 结果时 P0/P1 精确率不得低于 V1。回滚时将
-`REVIEW_RESULT_QUALITY_MODE` 切回 `off`、保持导出 `source=legacy`，并保留
-`assets/reviews/<review_id>/` 中的冻结 artifact 供排查。
+```json
+{
+  "v1": {"case-id": []},
+  "v2": {"case-id": []},
+  "repeated_runs": {"case-id": [[], [], [], [], []]}
+}
+```
+
+这里的 `v2` 指带 `review-quality/2` 质量信封的 V1 兼容 finding 集（例如 quality-on
+受控重跑），不是原始 `stage-c-v2-findings/1` 候选 artifact；Stage C 仍只作为 shadow
+差异和 SME 审阅材料。
+
+每个 V2 case 都绑定 `input_sha256`、`input_set_sha256`、`execution_sha256`、受控
+assertion / claim subject / scope identity、允许 evidence IDs、冲突/去重/整改预期。
+不同 input-set / execution SHA、混合运行或无法证明为空结果来自同一运行条件时都会失败；不会
+按 issue title、finding ID 或自由文本猜测配对。
+
+报告的 `metric_details` 会显示每项指标的分子、分母、阈值、适用状态和失败 case。
+技术门禁包括语义稳定性 ≥ 0.90、状态一致性 ≥ 0.95、V1 与候选引用复现均为 100%、附件型
+可发布 fail 全部 `supported`、内部冲突率和误合并数为 0、P0/P1 整改完整率 100%，以及 V2
+P0/P1 precision 不低于 V1。样本还必须至少有 6 份经裁决的底稿和 60 条经裁决 finding。
+
+缺少人工裁决或任一质量门禁失败时，命令返回非零状态。`promotion_ready=true` 只是
+单批技术条件已满足：仍需两个独立批次全部通过，并经审计 SME 审阅 V1/V2 差异后，才可
+申请 `REVIEW_RESULT_QUALITY_MODE=on` 小流量试点。详细的采集、审批、canary 与回滚步骤见
+[`docs/runbooks/review-quality-stability-promotion.md`](docs/runbooks/review-quality-stability-promotion.md)。
+
+回滚时恢复 `REVIEW_RESULT_QUALITY_MODE=shadow` 和 `REVIEW_JUDGEMENT_MODE=off`，保持
+默认 `source=legacy` 导出，并保留 `assets/reviews/<review_id>/` 的冻结 artifact 和失败
+样本供差异分析，不能删除它们来重置质量记录。
 
 # Docker 部署（后端）
 
