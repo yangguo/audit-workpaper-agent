@@ -36,6 +36,38 @@ class PolicyPackRef(BaseModel):
     version: str = Field(min_length=5, max_length=40)
 
 
+class RuntimeConfigSnapshot(BaseModel):
+    """Non-secret runtime choices that affect a review execution."""
+
+    review_model: str = ""
+    review_endpoint_sha256: str = ""
+    review_temperature: float = 0.1
+    review_json_mode: bool = True
+    verify_ssl: bool = True
+    quality_mode: Literal["off", "shadow", "on"] = "shadow"
+    deterministic_crosscheck_mode: Literal["all_findings", "p0_only", "off"] = (
+        "all_findings"
+    )
+    evidence_agent_mode: str = "fallback"
+    evidence_snapshot_max_cells: int = Field(default=50_000, ge=1)
+    challenger_full_text: bool = True
+    mineru_ocr_mode: str = "off"
+    mineru_ocr_language: str = "ch"
+    mineru_model_version: str = "vlm"
+    policy_mode: Literal["shadow", "off"] = "shadow"
+    judgement_mode: Literal["shadow", "off"] = "off"
+    judgement_max_requests: int = Field(default=200, ge=1)
+    prompt_bundle_version: str = "review-prompts/1"
+
+
+class ExecutionComponentRef(BaseModel):
+    """Identity of a reviewed code/configuration component without its path."""
+
+    component_id: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=80)
+    sha256: str = Field(min_length=1, max_length=128)
+
+
 class CellEvidence(BaseModel):
     evidence_id: str
     sheet_name: str
@@ -96,6 +128,13 @@ class ReviewManifest(BaseModel):
     policy_pack: PolicyPackRef | None = None
     judgement_policy_pack: PolicyPackRef | None = None
     engine_version: str = "stage-a-shadow"
+    # These fields are additive so stored Stage-A manifests remain readable.
+    # ``input_sha256`` remains available from the workpaper InputFile for
+    # legacy consumers; the two hashes below identify the full execution.
+    input_set_sha256: str = ""
+    execution_sha256: str = ""
+    runtime_config: RuntimeConfigSnapshot | None = None
+    components: list[ExecutionComponentRef] = Field(default_factory=list)
     artifact_status: ArtifactStatus = "running"
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)

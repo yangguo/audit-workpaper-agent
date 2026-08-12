@@ -159,6 +159,66 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
 
 
 @pytest.mark.asyncio
+async def test_manifest_is_started_before_v1_and_quality_reuses_execution_identity(
+    monkeypatch, tmp_path
+):
+    started_manifests = []
+    original_begin = ReviewArtifactStore.begin
+
+    def _record_begin(self, manifest):
+        started_manifests.append(manifest.model_dump(mode="json"))
+        return original_begin(self, manifest)
+
+    async def _assert_manifest_exists_before_review(**kwargs):
+        assert len(started_manifests) == 1
+        manifest = started_manifests[0]
+        assert manifest["input_set_sha256"]
+        assert manifest["execution_sha256"]
+        return (
+            [
+                {
+                    "issue_type": "受控测试发现",
+                    "severity": "P1",
+                    "status": "fail",
+                    "sheet": "SA-4c",
+                    "cell": "A1",
+                    "origin": "checkpoint",
+                    "rule_hint": "test",
+                    "evidence_refs": [
+                        {
+                            "sheet": "SA-4c",
+                            "cell_or_range": "A1",
+                            "excerpt": "管理员账号识别情况",
+                        }
+                    ],
+                    "quality_gates": {},
+                }
+            ],
+            {"total_findings": 1},
+        )
+
+    monkeypatch.setenv("REVIEW_RESULT_QUALITY_MODE", "shadow")
+    monkeypatch.setattr(ReviewArtifactStore, "begin", _record_begin)
+    monkeypatch.setattr(runner, "run_review", _assert_manifest_exists_before_review)
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    payload = load_findings(review_id)
+    await _REGISTRY[review_id]["shadow_task"]
+
+    manifest = ReviewArtifactStore().load_manifest(review_id)
+    assert payload is not None
+    assert manifest is not None
+    assert len(started_manifests) == 1
+    assert payload["findings"][0]["quality"]["provenance"]["input_set_sha256"] == manifest[
+        "input_set_sha256"
+    ]
+    assert payload["findings"][0]["quality"]["provenance"]["execution_sha256"] == manifest[
+        "execution_sha256"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_completed_review_starts_shadow_artifact_without_changing_v1_result(tmp_path):
     review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
 

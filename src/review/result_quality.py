@@ -62,6 +62,8 @@ class FindingProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     input_sha256: str = ""
+    input_set_sha256: str = ""
+    execution_sha256: str = ""
     engine_version: str = ""
     policy_pack: dict[str, str] | None = None
 
@@ -248,6 +250,8 @@ def build_quality_envelope(
     finding: Mapping[str, Any],
     *,
     input_sha256: str = "",
+    input_set_sha256: str = "",
+    execution_sha256: str = "",
     engine_version: str = "",
     policy_pack: Mapping[str, str] | None = None,
     verified_refs: Iterable[Mapping[str, Any]] | None = None,
@@ -305,6 +309,8 @@ def build_quality_envelope(
         },
         provenance=FindingProvenance(
             input_sha256=_string(input_sha256),
+            input_set_sha256=_string(input_set_sha256),
+            execution_sha256=_string(execution_sha256),
             engine_version=_string(engine_version),
             policy_pack=(dict(policy_pack) if policy_pack else None),
         ),

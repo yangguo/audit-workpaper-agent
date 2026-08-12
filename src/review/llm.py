@@ -17,6 +17,13 @@ from review.validation import _validate_finding_result, _validate_llm_results
 
 LLM_CALL_STATS: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
+# Keep the values used by the LLM client and the immutable execution manifest
+# in one place. Increment the prompt bundle version whenever a review prompt
+# changes in a way that can affect findings.
+REVIEW_LLM_TEMPERATURE = 0.1
+REVIEW_LLM_JSON_MODE_DEFAULT = True
+REVIEW_PROMPT_BUNDLE_VERSION = "review-prompts/1"
+
 _ROLE_TO_MSG = {
     "system": SystemMessage,
     "user": HumanMessage,
@@ -55,6 +62,30 @@ def _backoff_scale() -> float:
         return max(0.0, float(os.getenv("REVIEW_LLM_BACKOFF_SCALE", "1.0")))
     except Exception:
         return 1.0
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not str(value).strip():
+        return default
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def review_llm_runtime_settings() -> dict[str, Any]:
+    """Return the non-secret settings actually used by ``get_review_llm``.
+
+    The raw endpoint only exists in this short-lived return value. Callers
+    that persist configuration must hash it instead of serializing it.
+    """
+
+    return {
+        "model": os.getenv("REVIEW_LLM_MODEL", "doubao-seed-1-6-251015"),
+        "base_url": os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "",
+        "json_mode": _env_bool("REVIEW_LLM_JSON_MODE", REVIEW_LLM_JSON_MODE_DEFAULT),
+        "verify_ssl": _env_bool("LLM_VERIFY_SSL", True),
+        "temperature": REVIEW_LLM_TEMPERATURE,
+        "prompt_bundle_version": REVIEW_PROMPT_BUNDLE_VERSION,
+    }
 
 
 async def _llm_backoff_sleep(attempt: int, err_type: str) -> None:
@@ -208,19 +239,20 @@ async def _llm_request_json_list(
 def get_review_llm() -> ChatOpenAI:
     """Build the ChatOpenAI used by the review engine, from project env."""
     api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
-    model = os.getenv("REVIEW_LLM_MODEL", "doubao-seed-1-6-251015")
+    settings = review_llm_runtime_settings()
+    base_url = settings["base_url"] or None
+    model = settings["model"]
     # Force JSON-mode output when the provider supports it. Both DeepSeek and
     # ARK's OpenAI-compatible endpoints accept response_format={"type":"json_object"}.
     # Set REVIEW_LLM_JSON_MODE=0 to disable for providers that don't.
-    json_mode = os.getenv("REVIEW_LLM_JSON_MODE", "1") != "0"
+    json_mode = bool(settings["json_mode"])
     kwargs = {}
     if json_mode:
         kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
 
     # Some corporate endpoints (e.g. behind Kaspersky HTTPS interception) fail
     # certifi validation. Allow opt-out via LLM_VERIFY_SSL=false.
-    verify_ssl = str(os.getenv("LLM_VERIFY_SSL", "") or "").strip().lower() not in {"0", "false", "no", "off"}
+    verify_ssl = bool(settings["verify_ssl"])
     import httpx
     kwargs["http_client"] = httpx.Client(verify=verify_ssl)
     kwargs["http_async_client"] = httpx.AsyncClient(verify=verify_ssl)
@@ -229,7 +261,7 @@ def get_review_llm() -> ChatOpenAI:
         model=model,
         api_key=api_key,
         base_url=base_url,
-        temperature=0.1,
+        temperature=float(settings["temperature"]),
         max_retries=0,
         streaming=False,
         **kwargs,
