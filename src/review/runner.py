@@ -33,6 +33,12 @@ from review.evidence_provenance import EvidenceProvenanceIndex, verify_finding_e
 from review.evaluators import execute_policy_plan
 from review.finding_comparison import compare_finding_sets
 from review.findings import build_v2_findings, project_v2_findings_to_v1
+from review.finding_taxonomy import (
+    AssertionCatalog,
+    assertion_catalog_directory,
+    fallback_assertion_catalog,
+    load_assertion_catalog,
+)
 from review.judgement import build_judgement_requests, execute_judgement_requests
 from review.llm import LLM_CALL_STATS, get_review_llm
 from review.planner import build_review_plan
@@ -78,6 +84,32 @@ def _stage_c_judgement_config() -> tuple[str, str, str, str | None, int]:
     if max_requests <= 0:
         raise ValueError("REVIEW_JUDGEMENT_MAX_REQUESTS must be greater than zero")
     return mode, pack_id, pack_version, root, max_requests
+
+
+def _assertion_catalog_config() -> tuple[str, str, str | None]:
+    """Read the declarative finding-assertion catalog configuration."""
+
+    pack_id = os.getenv("REVIEW_ASSERTION_CATALOG_ID", "review-quality").strip()
+    version = os.getenv("REVIEW_ASSERTION_CATALOG_VERSION", "1.0.0").strip()
+    root = os.getenv("REVIEW_ASSERTION_CATALOG_ROOT", "").strip() or None
+    return pack_id, version, root
+
+
+def _assertion_catalog_component(
+    *, pack_id: str, version: str, root: str | None
+) -> ExecutionComponentRef:
+    """Fingerprint the assertion declarations that govern V1 classification."""
+
+    catalog_dir = assertion_catalog_directory(
+        pack_id=pack_id,
+        version=version,
+        root=root,
+    )
+    return component_ref_from_path(
+        component_id="review-quality-assertions",
+        version=version,
+        path=catalog_dir / "assertions.json",
+    )
 
 
 def _result_quality_config() -> str:
@@ -354,6 +386,10 @@ async def _run_review(
         artifact_setup_error = None
         execution_context: ReviewExecutionContext | None = None
         policy_root: str | None = None
+        # V1 must remain available even if a configured optional artifact
+        # component is unavailable. The fallback catalog classifies every
+        # finding explicitly as unclassified / human-review-required.
+        assertion_catalog: AssertionCatalog = fallback_assertion_catalog()
         try:
             snapshot_paths = await asyncio.to_thread(
                 store.snapshot_inputs,
@@ -391,6 +427,14 @@ async def _run_review(
                     judgement_root,
                     _,
                 ) = _stage_c_judgement_config()
+                assertion_catalog_id, assertion_catalog_version, assertion_catalog_root = (
+                    _assertion_catalog_config()
+                )
+                assertion_catalog = load_assertion_catalog(
+                    pack_id=assertion_catalog_id,
+                    version=assertion_catalog_version,
+                    root=assertion_catalog_root,
+                )
                 policy_pack = (
                     PolicyPackRef(id=policy_id, version=policy_version)
                     if policy_mode == "shadow"
@@ -402,6 +446,13 @@ async def _run_review(
                     else None
                 )
                 components: list[ExecutionComponentRef] = []
+                components.append(
+                    _assertion_catalog_component(
+                        pack_id=assertion_catalog_id,
+                        version=assertion_catalog.version,
+                        root=assertion_catalog_root,
+                    )
+                )
                 if policy_pack is not None:
                     components.append(
                         _policy_component_ref(
@@ -489,6 +540,7 @@ async def _run_review(
             sheets=sheets,
             llm=llm,
             on_progress=_make_progress_cb(review_id),
+            assertion_catalog=assertion_catalog,
         )
         quality_input_findings = [dict(item) for item in findings]
         legacy_findings = [

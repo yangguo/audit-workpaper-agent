@@ -128,6 +128,15 @@ async def _llm_review_findings(
             "excerpt": _safe_cell_text(item.snippet, 1200),
             "rule_basis": _safe_cell_text(item.basis, 1200),
             "rule_suggestion": _safe_cell_text(item.suggestion, 1200),
+            # These fields are produced by deterministic rules / the assertion
+            # catalog. The reviewer may reassess evidence and severity but must
+            # not invent or rewrite semantic classifications.
+            "assertion": {
+                "id": item.assertion_id,
+                "claim_type": item.claim_type,
+                "claim_subject": item.claim_subject,
+                "claim_value": item.claim_value,
+            },
             "checkpoint_keywords": keywords,
             "context_cells": [{"cell": c, "text": t} for c, t in context_cells],
         }
@@ -144,6 +153,7 @@ async def _llm_review_findings(
         "B. attachment_full_text 里如果有完整参数值（例如密码长度/有效期/锁定次数），**直接引用原文片段**（如「login/min_password_lng 6」「PASS_MAX_DAYS 99999」）到 reasons / llm_comment。\n"
         "C. 如果 attachment_full_text 显示 finding 不成立（例如 finding 说『缺 PAM』但 OCR 显示已有 pam_pwquality），必须把 status 改为 pass/不成立。\n"
         "D. 不要泛泛而谈，要结合 attachment_full_text + 摘录/上下文给出具体可执行建议（覆盖范围、职责分离、日志/台账/审批/协议等）。\n"
+        "E. payload.assertion 是受控目录/规则生成的分类元数据：不得输出或修改 assertion_id、claim_type、claim_subject、claim_value，也不得从问题标题自由推断新分类。\n"
         "输出格式：严格JSON对象 {\"results\": [...]}。每个元素必须包含字段：\n"
         "   - id: 整数\n"
         "   - status: \"pass\"/\"fail\"/\"unknown\"\n"

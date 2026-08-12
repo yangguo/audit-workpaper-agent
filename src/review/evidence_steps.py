@@ -16,11 +16,26 @@ from review.attachments import (
 )
 from review.constants import EVIDENCE_KEYWORDS
 from review.excel_utils import _detect_layout, _get_cell_value, _normalize_sheet_id, _truncate
+from review.finding_taxonomy import (
+    allowed_assertion_ids,
+    default_assertion_catalog,
+    deterministic_finding_fields,
+    validated_llm_assertion_fields,
+)
 from review.llm import _llm_request_json_list, _llm_stat
 from review.models import AttachmentFile, Finding, _SEVERITY_FROM_CHINESE
 from review.validation import _verify_evidence_refs
 
 _EXCERPT_MAX_LEN = 2000
+
+
+def _llm_assertion_instruction() -> str:
+    allowed = allowed_assertion_ids(default_assertion_catalog(), origin="llm")
+    return (
+        "- assertion_id: 只能从以下目录白名单中选择："
+        + ", ".join(allowed)
+        + "；无法受控分类时必须使用 finding.unclassified，不能自行发明类别\n"
+    )
 
 
 async def _llm_check_evidence_vs_steps(
@@ -91,6 +106,19 @@ async def _llm_check_evidence_vs_steps(
                             1200,
                         ),
                         suggestion="核对附件编号/命名/路径与附件目录是否一致；必要时在底稿中给出可复核的相对路径或文件名，并补充证据来源说明。",
+                        **deterministic_finding_fields(
+                            origin="evidence_steps",
+                            rule_hint="attachment_reference_mismatch",
+                            assertion_id="attachment.reference.mapping",
+                            sheet=ws_title,
+                            cell=c_cell,
+                            claim_subject=(
+                                f"{ws_title}|attachment:{sorted({m for m in missing if m})[0]}"
+                                if any(m for m in missing)
+                                else ""
+                            ),
+                            claim_value="reference_mismatch",
+                        ),
                     )
                 )
             if matched or agent_evidence:
@@ -179,6 +207,13 @@ async def _llm_check_evidence_vs_steps(
                 snippet="",
                 basis=_truncate(f"原匹配记录数: {original}；本次LLM抽样复核: {len(cases)}（可通过环境变量LLM_EVIDENCE_STEPS_MAX_ITEMS调整）", 1200),
                 suggestion="如需全量复核，请增大LLM_EVIDENCE_STEPS_MAX_ITEMS，或先缩小Sheet范围（-s）再运行。",
+                **deterministic_finding_fields(
+                    origin="evidence_steps",
+                    rule_hint="sampling_limited",
+                    assertion_id="population.sample_size.present",
+                    sheet=ws_title,
+                    claim_value="sampling_limited",
+                ),
             )
         )
 
@@ -202,8 +237,9 @@ async def _llm_check_evidence_vs_steps(
         "- risk_type: \"覆盖性\"/\"一致性\"/\"证据不足\"/\"方法性\"/\"逻辑性\"/\"跨字段一致性\"之一\n"
         "- fix_suggestion: 对象，含 {missing_field, supplement_explanation, required_evidence_type}\n"
         "- unknown_reason: 当status=unknown时必填，≥10字符\n"
-        "向后兼容字段（可同时输出）：basis, suggestion, issue_type, missing_evidence\n"
-        "不要输出Markdown代码块，不要输出多余文字。"
+        + _llm_assertion_instruction()
+        + "向后兼容字段（可同时输出）：basis, suggestion, issue_type, missing_evidence\n"
+        + "不要输出Markdown代码块，不要输出多余文字。"
     )
 
     id_to_case = {int(c.get("id")): c for c in cases if isinstance(c.get("id"), int)}
@@ -212,6 +248,9 @@ async def _llm_check_evidence_vs_steps(
     # prepended to each user prompt so the LLM applies it per chunk.
     inventory = build_evidence_inventory(attachments)
     guidance_prefix = (EVIDENCE_GUIDANCE + "\n") if inventory else ""
+    llm_assertion_ids = allowed_assertion_ids(
+        default_assertion_catalog(), origin="llm"
+    )
     for start in range(0, len(cases), max(1, int(batch_size))):
         chunk = cases[start: start + max(1, int(batch_size))]
         payload = {"sheet": ws_title, "items": chunk}
@@ -347,6 +386,11 @@ async def _llm_check_evidence_vs_steps(
                         reasons=json.dumps(reasons_list, ensure_ascii=False),
                         fix_suggestion_detail=json.dumps(fix_suggestion_obj, ensure_ascii=False),
                         unknown_reason=unknown_reason,
+                        **validated_llm_assertion_fields(
+                            sheet=ws_title,
+                            cell=c_cell,
+                            supplied_assertion_id=str(obj.get("assertion_id", "") or ""),
+                        ),
                     )
                 )
 
@@ -354,6 +398,7 @@ async def _llm_check_evidence_vs_steps(
         parsed, last_error = await _llm_request_json_list(
             llm=llm, system_prompt=system_prompt, user_prompt=user_prompt,
             stage=stage, max_attempts=3,
+            allowed_assertion_ids=llm_assertion_ids,
         )
         if parsed is not None:
             _consume_results(parsed)
@@ -368,6 +413,7 @@ async def _llm_check_evidence_vs_steps(
                     parsed1, err1 = await _llm_request_json_list(
                         llm=llm, system_prompt=system_prompt, user_prompt=user_prompt1,
                         stage=stage, max_attempts=3,
+                        allowed_assertion_ids=llm_assertion_ids,
                     )
                     if parsed1 is not None:
                         _consume_results(parsed1)
@@ -394,4 +440,5 @@ def _evidence_steps_failure_finding(ws_title: str, error) -> Finding:
         status="unknown",
         unknown_reason="LLM调用失败，无法复核",
         risk_type="证据不足",
+        **validated_llm_assertion_fields(sheet=ws_title),
     )

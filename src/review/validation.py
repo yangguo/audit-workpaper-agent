@@ -3,7 +3,7 @@
 No jsonschema dependency: the schema is enforced by hand here.
 """
 import re
-from typing import Any, List, Optional, Tuple
+from typing import Any, Collection, List, Optional, Tuple
 
 from review.models import (
     _EXCERPT_CONSTRUCTED_MARKER,
@@ -14,6 +14,15 @@ from review.models import (
 _VALID_STATUSES = {"pass", "fail", "unknown"}
 _VALID_SEVERITIES = {"P0", "P1", "P2"}
 _VALID_RISK_TYPES = {"覆盖性", "一致性", "证据不足", "方法性", "逻辑性", "跨字段一致性"}
+_VALID_CLAIM_TYPES = {
+    "workpaper_text",
+    "attachment_presence",
+    "attachment_content",
+    "period_date",
+    "configuration_value",
+    "population_coverage",
+    "record_consistency",
+}
 
 _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^\w一-鿿]+", re.UNICODE)
@@ -28,7 +37,9 @@ def _excerpt_matches(excerpt: str, actual_text: str) -> bool:
     return norm_ex in norm_at
 
 
-def _validate_finding_result(obj: Any) -> Tuple[bool, List[str]]:
+def _validate_finding_result(
+    obj: Any, *, allowed_assertion_ids: Collection[str] | None = None
+) -> Tuple[bool, List[str]]:
     """Validate a single finding dict. Returns (valid, errors).
 
     Beyond shape checks, enforces:
@@ -59,6 +70,23 @@ def _validate_finding_result(obj: Any) -> Tuple[bool, List[str]]:
     risk = str(obj.get("risk_type", "")).strip()
     if risk and risk not in _VALID_RISK_TYPES:
         errors.append(f"risk_type must be one of {sorted(_VALID_RISK_TYPES)}; got {risk!r}")
+
+    assertion_id = obj.get("assertion_id")
+    if assertion_id is not None and not str(assertion_id).strip():
+        errors.append("assertion_id must be non-empty when supplied")
+    if assertion_id is not None and allowed_assertion_ids is not None:
+        allowed = {str(value).strip() for value in allowed_assertion_ids}
+        if str(assertion_id).strip() not in allowed:
+            errors.append("assertion_id is not in the producer allow-list")
+    claim_type = str(obj.get("claim_type", "")).strip()
+    if claim_type and claim_type not in _VALID_CLAIM_TYPES:
+        errors.append(
+            f"claim_type must be one of {sorted(_VALID_CLAIM_TYPES)}; got {claim_type!r}"
+        )
+    for key in ("claim_subject", "claim_value"):
+        value = obj.get(key)
+        if value is not None and len(str(value)) > 500:
+            errors.append(f"{key} must be at most 500 characters")
 
     if status == "fail":
         if not isinstance(refs, list) or len(refs) == 0:
@@ -174,7 +202,9 @@ def _repair_finding_result(obj: Any) -> Optional[dict]:
     return repaired
 
 
-def _validate_llm_results(results_list: List[Any]) -> Tuple[List[dict], bool]:
+def _validate_llm_results(
+    results_list: List[Any], *, allowed_assertion_ids: Collection[str] | None = None
+) -> Tuple[List[dict], bool]:
     """Validate and repair a list of finding dicts.
 
     Returns (valid_results, needs_retry). If any result is unrepairable,
@@ -182,17 +212,37 @@ def _validate_llm_results(results_list: List[Any]) -> Tuple[List[dict], bool]:
     """
     valid: List[dict] = []
     needs_retry = False
+    allowed = (
+        {str(value).strip() for value in allowed_assertion_ids}
+        if allowed_assertion_ids is not None
+        else None
+    )
     for obj in results_list:
         if not isinstance(obj, dict):
             needs_retry = True
             continue
-        ok, _ = _validate_finding_result(obj)
+        ok, _ = _validate_finding_result(
+            obj, allowed_assertion_ids=allowed_assertion_ids
+        )
         if ok:
             valid.append(obj)
         else:
             repaired = _repair_finding_result(obj)
             if repaired is not None:
-                ok2, _ = _validate_finding_result(repaired)
+                # A model may not create a semantic assertion. Preserve the
+                # review result, but replace an unapproved identifier with the
+                # explicit human-review fallback instead of dropping the
+                # entire finding after the final retry.
+                supplied_assertion = str(repaired.get("assertion_id", "")).strip()
+                if allowed is not None and supplied_assertion and supplied_assertion not in allowed:
+                    repaired = dict(repaired)
+                    if "finding.unclassified" in allowed:
+                        repaired["assertion_id"] = "finding.unclassified"
+                    else:
+                        repaired.pop("assertion_id", None)
+                ok2, _ = _validate_finding_result(
+                    repaired, allowed_assertion_ids=allowed
+                )
                 if ok2:
                     valid.append(repaired)
                 else:

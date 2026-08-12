@@ -10,6 +10,7 @@ from openpyxl.utils import get_column_letter
 from review.attachments import EVIDENCE_GUIDANCE, build_evidence_inventory
 from review.constants import EVIDENCE_KEYWORDS, INTERVIEW_ONLY_KEYWORDS, OS_DB_KEYWORDS
 from review.excel_utils import _detect_layout, _extract_sheet_text_cells, _get_cell_value, _truncate
+from review.finding_taxonomy import deterministic_finding_fields
 from review.llm import _llm_chat, _llm_stat, _try_parse_json
 from review.models import Finding, _SEVERITY_FROM_CHINESE, _EXCERPT_MAX_LEN
 from review.validation import _verify_evidence_refs
@@ -256,6 +257,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                             snippet=_truncate(c_text, 220),
                             basis="执行列内容更像标准模板/判定口径（如「如果/以下/被认为」及大量条款），缺少「我们获取/检查/抽样/复核」等实际执行描述。",
                             suggestion="将该单元格补充为实际执行步骤与获取证据描述（含样本框定方法、样本来源/编号、证据链接/截图/导出）。",
+                            **deterministic_finding_fields(
+                                origin="procedure_pairs",
+                                rule_hint="execution_column_template",
+                                assertion_id="procedure.execution.correspondence",
+                                sheet=ws_title,
+                                cell=c_cell,
+                                claim_value="execution_template_unreplaced",
+                            ),
                         )
                     )
                 continue
@@ -270,6 +279,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                         snippet=_truncate(c_text, 220),
                         basis="执行描述出现“访谈/询问/了解”等，但未体现截图、导出清单、日志、台账、审批等实质性证据。",
                         suggestion="补充系统截图/导出清单/日志台账/审批记录等，并在执行程序中明确证据来源与核查步骤。",
+                        **deterministic_finding_fields(
+                            origin="procedure_pairs",
+                            rule_hint="interview_only_execution",
+                            assertion_id="procedure.execution.correspondence",
+                            sheet=ws_title,
+                            cell=c_cell,
+                            claim_value="interview_only",
+                        ),
                     )
                 )
 
@@ -283,6 +300,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                         snippet=_truncate(c_text, 220),
                         basis=f"标准审计程序要求获取/检查证据（{', '.join(required_evidence)}），但执行描述未体现对应证据。",
                         suggestion="对照标准程序逐条补齐证据（截图/清单/日志/审批/协议等），并在底稿中保留可复核的原始文件或路径。",
+                        **deterministic_finding_fields(
+                            origin="procedure_pairs",
+                            rule_hint="required_evidence_missing",
+                            assertion_id="procedure.required_evidence",
+                            sheet=ws_title,
+                            cell=c_cell,
+                            claim_value="required_evidence_missing",
+                        ),
                     )
                 )
 
@@ -297,6 +322,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                             snippet=_truncate(c_text, 220),
                             basis="常见问题：样本总量应优先以用户清单“账号创建时间”为基准；仅以入职名单抽样可能遗漏外包/延期开户等。",
                             suggestion="优先获取系统用户清单含账号创建时间字段进行抽样；无该字段时，采用用户清单跨期比对+入职名单交叉验证组合确定样本总量。",
+                            **deterministic_finding_fields(
+                                origin="procedure_pairs",
+                                rule_hint="account_creation_population",
+                                assertion_id="population.sample_size.present",
+                                sheet=ws_title,
+                                cell=c_cell,
+                                claim_value="population_basis_uncertain",
+                            ),
                         )
                     )
 
@@ -311,6 +344,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                             snippet=_truncate(c_text, 220),
                             basis="常见问题：不应从“已禁用账户”反向抽样，应将离职名单与用户清单全量关联核查账号状态与禁用时间。",
                             suggestion="获取审计期间离职名单，与系统用户清单关联，全量核查账号状态/禁用时间，必要时补充禁用工单或审批证据。",
+                            **deterministic_finding_fields(
+                                origin="procedure_pairs",
+                                rule_hint="terminated_account_disable_method",
+                                assertion_id="procedure.execution.correspondence",
+                                sheet=ws_title,
+                                cell=c_cell,
+                                claim_value="method_insufficient",
+                            ),
                         )
                     )
 
@@ -325,6 +366,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                             snippet=_truncate(c_text, 220),
                             basis="常见问题：调岗应纳入权限变更/禁用控制测试，仅看账号状态不足以覆盖权限调整实质性测试。",
                             suggestion="获取调岗人员名单与用户清单关联，框定调岗且持有账号人员范围，按调岗前后岗位权限差异抽样核查权限变更/禁用证据。",
+                            **deterministic_finding_fields(
+                                origin="procedure_pairs",
+                                rule_hint="transfer_access_change_coverage",
+                                assertion_id="population.sample_size.present",
+                                sheet=ws_title,
+                                cell=c_cell,
+                                claim_value="coverage_insufficient",
+                            ),
                         )
                     )
 
@@ -340,6 +389,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                                 snippet=_truncate(c_text, 220),
                                 basis="设计有效性测试通常以制度/流程/政策文件作为证据；当前执行描述未体现已获取/引用相关文件。",
                                 suggestion="补充引用密码策略相关制度/规程/政策文件（文件名、条款、编号/链接），并在底稿中说明其适用系统与覆盖范围。",
+                                **deterministic_finding_fields(
+                                    origin="procedure_pairs",
+                                    rule_hint="password_policy_design_evidence",
+                                    assertion_id="procedure.required_evidence",
+                                    sheet=ws_title,
+                                    cell=c_cell,
+                                    claim_value="design_evidence_missing",
+                                ),
                             )
                         )
                 elif not any(k in c_text for k in ("截图", "参数", "配置", "界面")):
@@ -352,6 +409,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                             snippet=_truncate(c_text, 220),
                             basis="常见问题：仅文字说明不足以支撑密码策略；应留存参数界面/配置截图等实质性证据。",
                             suggestion="补充密码策略参数界面截图（复杂度/锁定/有效期/历史密码等），并核对底稿描述与系统配置一致。",
+                            **deterministic_finding_fields(
+                                origin="procedure_pairs",
+                                rule_hint="password_policy_effectiveness_evidence",
+                                assertion_id="procedure.required_evidence",
+                                sheet=ws_title,
+                                cell=c_cell,
+                                claim_value="effectiveness_evidence_missing",
+                            ),
                         )
                     )
 
@@ -366,6 +431,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                             snippet=_truncate(c_text, 220),
                             basis="常见问题：仅访谈了解批处理设置不充分；应获取任务清单/日志，并覆盖应用层、操作系统、数据库层面。",
                             suggestion="补充应用/OS/DB层面任务清单与执行日志导出，并明确是否覆盖全部相关批处理作业。",
+                            **deterministic_finding_fields(
+                                origin="procedure_pairs",
+                                rule_hint="batch_job_evidence_scope",
+                                assertion_id="population.sample_size.present",
+                                sheet=ws_title,
+                                cell=c_cell,
+                                claim_value="coverage_insufficient",
+                            ),
                         )
                     )
 
@@ -380,6 +453,14 @@ def _check_procedure_pairs(ws_title: str, ws) -> List[Finding]:
                             snippet=_truncate(c_text, 220),
                             basis="常见问题：应以变更日志/变更台账为样本总量基准抽样审批；仅依赖访谈或从审批流程反向框定无法验证“变更均经审批”。",
                             suggestion="获取变更日志/台账作为总体，按期间抽样追溯审批与测试/上线证据；补充工单、发布记录、回滚记录等。",
+                            **deterministic_finding_fields(
+                                origin="procedure_pairs",
+                                rule_hint="change_population_evidence",
+                                assertion_id="population.sample_size.present",
+                                sheet=ws_title,
+                                cell=c_cell,
+                                claim_value="population_basis_uncertain",
+                            ),
                         )
                     )
 
@@ -401,6 +482,13 @@ def _check_sheet_scope(ws_title: str, ws) -> List[Finding]:
                     snippet=_truncate(sheet_text, 220),
                     basis="常见问题：项目检查范围未覆盖操作系统与数据库层面的管理员账号设置情况，可能导致特权账号识别不完整。",
                     suggestion="补充获取并核对OS/DB层面管理员账号清单（或截图/导出），并评估与应用层管理员职责冲突与共享风险。",
+                    **deterministic_finding_fields(
+                        origin="sheet_scope",
+                        rule_hint="privileged_account_scope",
+                        assertion_id="scope.privileged_account.coverage",
+                        sheet=ws_title,
+                        claim_value="coverage_insufficient",
+                    ),
                 )
             )
 
@@ -415,6 +503,13 @@ def _check_sheet_scope(ws_title: str, ws) -> List[Finding]:
                     snippet=_truncate(sheet_text, 220),
                     basis="常见问题：供应商维护/托管时需获取相关协议文件检查双方权利义务与实际履行情况。",
                     suggestion="补充协议/合同/运维报告/工单等证据，明确管理员账号归属（租户级权限）与监控复核责任。",
+                    **deterministic_finding_fields(
+                        origin="sheet_scope",
+                        rule_hint="vendor_hosting_evidence",
+                        assertion_id="scope.vendor_hosting.evidence",
+                        sheet=ws_title,
+                        claim_value="evidence_insufficient",
+                    ),
                 )
             )
 
@@ -783,6 +878,14 @@ async def _llm_check_procedure_pairs(
                                 reasons=json.dumps([_truncate(reason or raw, 300)] if (reason or raw) else [], ensure_ascii=False),
                                 fix_suggestion_detail=json.dumps({"supplement_explanation": sug[:300]}, ensure_ascii=False),
                                 unknown_reason=proc_unknown,
+                                **deterministic_finding_fields(
+                                    origin="procedure_pair_llm",
+                                    rule_hint="",
+                                    assertion_id="procedure.execution.correspondence",
+                                    sheet=ws.title,
+                                    cell=execution_cell,
+                                    claim_value="mismatch",
+                                ),
                             )
                         )
                     elif result_label == "API错误":
@@ -813,6 +916,15 @@ async def _llm_check_procedure_pairs(
                                 unknown_reason=f"LLM调用失败（{err_detail[:200]}），无法自动判定，需人工复核",
                                 risk_type="证据不足",
                                 evidence_refs=json.dumps(ev_refs, ensure_ascii=False),
+                                needs_review=True,
+                                **deterministic_finding_fields(
+                                    origin="procedure_pair_llm",
+                                    rule_hint="",
+                                    assertion_id="procedure.execution.correspondence",
+                                    sheet=ws.title,
+                                    cell=execution_cell,
+                                    claim_value="unknown",
+                                ),
                             )
                         )
                     else:
@@ -842,6 +954,15 @@ async def _llm_check_procedure_pairs(
                                 + (f"（LLM分析: {_truncate(llm_partial, 150)}）" if llm_partial else ""),
                                 risk_type="证据不足",
                                 evidence_refs=json.dumps(ev_refs, ensure_ascii=False),
+                                needs_review=True,
+                                **deterministic_finding_fields(
+                                    origin="procedure_pair_llm",
+                                    rule_hint="",
+                                    assertion_id="procedure.execution.correspondence",
+                                    sheet=ws.title,
+                                    cell=execution_cell,
+                                    claim_value="unknown",
+                                ),
                             )
                         )
 

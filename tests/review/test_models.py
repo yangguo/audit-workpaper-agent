@@ -44,6 +44,10 @@ def test_finding_defaults_are_backward_compatible():
     assert f.fix_suggestion_detail == "{}"
     assert f.unknown_reason == ""
     assert f.needs_review is False
+    assert f.assertion_id == ""
+    assert f.claim_type == ""
+    assert f.claim_subject == ""
+    assert f.claim_value == ""
 
 
 def test_finding_is_frozen():
@@ -57,6 +61,8 @@ def test_finding_is_frozen():
 def test_finding_result_schema_required_fields():
     required = _FINDING_RESULT_SCHEMA["required"]
     assert required == ["status", "conclusion", "evidence_refs"]
+    assert _FINDING_RESULT_SCHEMA["properties"]["assertion_id"]["type"] == "string"
+    assert _FINDING_RESULT_SCHEMA["properties"]["claim_type"]["type"] == "string"
 
 
 def test_attachment_preview_item_fields():

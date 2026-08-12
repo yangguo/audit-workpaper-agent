@@ -159,6 +159,20 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
 
 
 @pytest.mark.asyncio
+async def test_execution_manifest_records_assertion_catalog_component(tmp_path):
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+
+    await _REGISTRY[review_id]["task"]
+    await _REGISTRY[review_id]["shadow_task"]
+
+    manifest = ReviewArtifactStore().load_manifest(review_id)
+    assert manifest is not None
+    assert {
+        component["component_id"] for component in manifest["components"]
+    } >= {"review-quality-assertions"}
+
+
+@pytest.mark.asyncio
 async def test_manifest_is_started_before_v1_and_quality_reuses_execution_identity(
     monkeypatch, tmp_path
 ):

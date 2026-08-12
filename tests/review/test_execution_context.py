@@ -128,3 +128,41 @@ def test_runtime_config_fingerprints_endpoint_without_serializing_credentials(mo
     assert "secret" not in serialized
     assert "private" not in serialized
     assert "example.test" not in serialized
+
+
+def test_execution_hash_changes_when_assertion_catalog_contents_change(tmp_path):
+    from review.execution_context import component_ref_from_path, stable_execution_sha256
+
+    assertions = tmp_path / "assertions.json"
+    assertions.write_text('{"version":"1"}', encoding="utf-8")
+    first_component = component_ref_from_path(
+        component_id="review-quality-assertions",
+        version="1.0.0",
+        path=assertions,
+    )
+    first_hash = stable_execution_sha256(
+        input_set_sha256="input-sha",
+        engine_version="stage-a-quality-shadow",
+        policy_pack=None,
+        judgement_policy_pack=None,
+        components=[first_component],
+        runtime_config=_runtime_config(),
+    )
+
+    assertions.write_text('{"version":"2"}', encoding="utf-8")
+    second_component = component_ref_from_path(
+        component_id="review-quality-assertions",
+        version="1.0.0",
+        path=assertions,
+    )
+    second_hash = stable_execution_sha256(
+        input_set_sha256="input-sha",
+        engine_version="stage-a-quality-shadow",
+        policy_pack=None,
+        judgement_policy_pack=None,
+        components=[second_component],
+        runtime_config=_runtime_config(),
+    )
+
+    assert first_component.sha256 != second_component.sha256
+    assert first_hash != second_hash

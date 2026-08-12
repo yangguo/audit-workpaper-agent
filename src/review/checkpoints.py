@@ -18,6 +18,11 @@ from review.attachments import (
     build_evidence_inventory,
     format_evidence_refs_for_basis,
 )
+from review.finding_taxonomy import (
+    allowed_assertion_ids,
+    default_assertion_catalog,
+    validated_llm_assertion_fields,
+)
 from review.llm import _llm_request_json_list, _llm_stat
 from review.models import Finding, _SEVERITY_FROM_CHINESE
 from review.validation import _verify_evidence_refs
@@ -108,6 +113,15 @@ def _extract_checkpoint_keywords(checkpoint: str) -> List[str]:
     return picked or [t[:16].strip()] if t.strip() else []
 
 
+def _llm_assertion_instruction() -> str:
+    allowed = allowed_assertion_ids(default_assertion_catalog(), origin="llm")
+    return (
+        "- assertion_id: 只能从以下目录白名单中选择："
+        + ", ".join(allowed)
+        + "；无法受控分类时必须使用 finding.unclassified，不能自行发明类别\n"
+    )
+
+
 async def _llm_check_sheet_by_checkpoints(
     *,
     llm,
@@ -155,6 +169,7 @@ async def _llm_check_sheet_by_checkpoints(
                 status="unknown",
                 unknown_reason="Sheet内无文本可复核",
                 risk_type="证据不足",
+                **validated_llm_assertion_fields(sheet=ws_title),
             )
         ]
 
@@ -182,10 +197,14 @@ async def _llm_check_sheet_by_checkpoints(
         "- risk_type: \"覆盖性\"/\"一致性\"/\"证据不足\"/\"方法性\"/\"逻辑性\"/\"跨字段一致性\"之一\n"
         "- fix_suggestion: 对象，含 {supplement_explanation}\n"
         "- unknown_reason: status=unknown时必填，≥10字符\n"
+        + _llm_assertion_instruction()
     )
 
     findings: List[Finding] = []
     cell_ref_re = re.compile(r"^[A-Z]{1,3}\d{1,7}$")
+    llm_assertion_ids = allowed_assertion_ids(
+        default_assertion_catalog(), origin="llm"
+    )
     inventory = build_evidence_inventory(attachments)
     if inventory:
         system_prompt = system_prompt + "\n" + EVIDENCE_GUIDANCE + "\n" + inventory
@@ -394,6 +413,11 @@ async def _llm_check_sheet_by_checkpoints(
                         reasons=json.dumps(reasons_list, ensure_ascii=False),
                         fix_suggestion_detail=json.dumps(fix_suggestion_obj, ensure_ascii=False),
                         unknown_reason=unknown_reason,
+                        **validated_llm_assertion_fields(
+                            sheet=ws_title,
+                            cell=cell,
+                            supplied_assertion_id=str(obj.get("assertion_id", "") or ""),
+                        ),
                     )
                 )
 
@@ -404,6 +428,7 @@ async def _llm_check_sheet_by_checkpoints(
             user_prompt=user_prompt,
             stage=stage,
             max_attempts=2,
+            allowed_assertion_ids=llm_assertion_ids,
         )
         if parsed is not None:
             _consume_results(parsed)
@@ -421,6 +446,7 @@ async def _llm_check_sheet_by_checkpoints(
                     parsed1, err1 = await _llm_request_json_list(
                         llm=llm, system_prompt=system_prompt, user_prompt=user_prompt1,
                         stage=stage, max_attempts=2,
+                        allowed_assertion_ids=llm_assertion_ids,
                     )
                     if parsed1 is not None:
                         _consume_results(parsed1)
@@ -456,4 +482,5 @@ def _checkpoint_failure_finding(ws_title: str, checkpoint: str, error) -> Findin
         status="unknown",
         unknown_reason="LLM调用失败，无法复核",
         risk_type="证据不足",
+        **validated_llm_assertion_fields(sheet=ws_title),
     )

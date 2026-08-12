@@ -61,6 +61,10 @@ def test_check_procedure_pairs_flags_unreplaced_template():
     assert len(findings) == 1
     assert findings[0].issue_type == "执行列疑似未替换模板/未按要求填列"
     assert findings[0].severity == "P0"
+    assert findings[0].origin == "procedure_pairs"
+    assert findings[0].rule_hint == "execution_column_template"
+    assert findings[0].assertion_id == "procedure.execution.correspondence"
+    assert findings[0].claim_value == "execution_template_unreplaced"
 
 
 def test_check_procedure_pairs_flags_interview_only():
@@ -85,6 +89,8 @@ def test_check_sheet_scope_flags_missing_os_db_admins():
     findings = _check_sheet_scope("SA-4c", ws)
     assert len(findings) == 1
     assert findings[0].issue_type == "特权账号识别范围可能不完整"
+    assert findings[0].assertion_id == "scope.privileged_account.coverage"
+    assert findings[0].claim_subject == "SA-4c|scope:privileged_account_scope"
 
 
 def test_check_sheet_scope_no_finding_when_os_db_covered():

@@ -1,0 +1,138 @@
+{
+  "id": "review-quality",
+  "version": "1.0.0",
+  "assertions": [
+    {
+      "assertion_id": "attachment.inventory.presence",
+      "version": "1.0.0",
+      "claim_type": "attachment_presence",
+      "allowed_origins": ["attachment_reference", "checkpoint"],
+      "requires_attachment_support": true,
+      "exclusive_claim": true,
+      "deterministic_gate_ids": ["attachment_inventory_consistent", "claim_has_required_source_kind"],
+      "remediation_template_id": "attachment_inventory_presence",
+      "root_family": "attachment_inventory"
+    },
+    {
+      "assertion_id": "attachment.reference.mapping",
+      "version": "1.0.0",
+      "claim_type": "attachment_presence",
+      "allowed_origins": ["checkpoint", "evidence_steps"],
+      "requires_attachment_support": true,
+      "exclusive_claim": true,
+      "deterministic_gate_ids": ["attachment_inventory_consistent", "claim_has_required_source_kind"],
+      "remediation_template_id": "attachment_reference_mapping",
+      "root_family": "attachment_inventory"
+    },
+    {
+      "assertion_id": "attachment.content.support",
+      "version": "1.0.0",
+      "claim_type": "attachment_content",
+      "allowed_origins": ["attachment_reference", "evidence_steps", "checkpoint"],
+      "requires_attachment_support": true,
+      "exclusive_claim": true,
+      "deterministic_gate_ids": ["claim_has_required_source_kind", "evidence_excerpt_matches_frozen_source"],
+      "remediation_template_id": "attachment_content_support",
+      "root_family": "attachment_content"
+    },
+    {
+      "assertion_id": "configuration.asset_coverage.support",
+      "version": "1.0.0",
+      "claim_type": "configuration_value",
+      "allowed_origins": ["configuration", "checkpoint"],
+      "requires_attachment_support": true,
+      "exclusive_claim": false,
+      "deterministic_gate_ids": ["configuration_scope_supported", "claim_has_required_source_kind"],
+      "remediation_template_id": "configuration_asset_coverage",
+      "root_family": "configuration_coverage"
+    },
+    {
+      "assertion_id": "finding.unclassified",
+      "version": "1.0.0",
+      "claim_type": "workpaper_text",
+      "allowed_origins": ["attachment_reference", "checkpoint", "configuration", "evidence_steps", "legacy", "llm", "procedure_pair_llm", "procedure_pairs", "record", "sheet_scope"],
+      "requires_attachment_support": false,
+      "exclusive_claim": false,
+      "deterministic_gate_ids": [],
+      "remediation_template_id": "human_refinement",
+      "root_family": ""
+    },
+    {
+      "assertion_id": "population.sample_size.present",
+      "version": "1.0.0",
+      "claim_type": "population_coverage",
+      "allowed_origins": ["evidence_steps", "procedure_pairs"],
+      "requires_attachment_support": false,
+      "exclusive_claim": false,
+      "deterministic_gate_ids": ["sample_size_present"],
+      "remediation_template_id": "population_sample_size",
+      "root_family": "population_coverage"
+    },
+    {
+      "assertion_id": "procedure.execution.correspondence",
+      "version": "1.0.0",
+      "claim_type": "workpaper_text",
+      "allowed_origins": ["procedure_pair_llm", "procedure_pairs"],
+      "requires_attachment_support": false,
+      "exclusive_claim": false,
+      "deterministic_gate_ids": ["evidence_excerpt_matches_frozen_source"],
+      "remediation_template_id": "procedure_execution_correspondence",
+      "root_family": "procedure_execution"
+    },
+    {
+      "assertion_id": "procedure.required_evidence",
+      "version": "1.0.0",
+      "claim_type": "workpaper_text",
+      "allowed_origins": ["procedure_pairs"],
+      "requires_attachment_support": false,
+      "exclusive_claim": false,
+      "deterministic_gate_ids": ["evidence_excerpt_matches_frozen_source"],
+      "remediation_template_id": "procedure_required_evidence",
+      "root_family": "procedure_evidence"
+    },
+    {
+      "assertion_id": "record.field.consistency",
+      "version": "1.0.0",
+      "claim_type": "record_consistency",
+      "allowed_origins": ["record"],
+      "requires_attachment_support": false,
+      "exclusive_claim": true,
+      "deterministic_gate_ids": ["evidence_excerpt_matches_frozen_source"],
+      "remediation_template_id": "record_field_consistency",
+      "root_family": "record_consistency"
+    },
+    {
+      "assertion_id": "record.period_date.consistency",
+      "version": "1.0.0",
+      "claim_type": "period_date",
+      "allowed_origins": ["checkpoint", "record"],
+      "requires_attachment_support": false,
+      "exclusive_claim": true,
+      "deterministic_gate_ids": ["period_date_within_scope", "evidence_excerpt_matches_frozen_source"],
+      "remediation_template_id": "record_period_date_consistency",
+      "root_family": "record_consistency"
+    },
+    {
+      "assertion_id": "scope.privileged_account.coverage",
+      "version": "1.0.0",
+      "claim_type": "population_coverage",
+      "allowed_origins": ["sheet_scope"],
+      "requires_attachment_support": false,
+      "exclusive_claim": false,
+      "deterministic_gate_ids": ["evidence_excerpt_matches_frozen_source"],
+      "remediation_template_id": "privileged_account_coverage",
+      "root_family": "scope_coverage"
+    },
+    {
+      "assertion_id": "scope.vendor_hosting.evidence",
+      "version": "1.0.0",
+      "claim_type": "attachment_content",
+      "allowed_origins": ["sheet_scope"],
+      "requires_attachment_support": true,
+      "exclusive_claim": false,
+      "deterministic_gate_ids": ["claim_has_required_source_kind"],
+      "remediation_template_id": "vendor_hosting_evidence",
+      "root_family": "scope_evidence"
+    }
+  ]
+}

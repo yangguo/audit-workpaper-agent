@@ -55,6 +55,21 @@ _FINDING_RESULT_SCHEMA: Dict[str, Any] = {
             },
         },
         "unknown_reason": {"type": "string"},
+        "assertion_id": {"type": "string", "minLength": 3},
+        "claim_type": {
+            "type": "string",
+            "enum": [
+                "workpaper_text",
+                "attachment_presence",
+                "attachment_content",
+                "period_date",
+                "configuration_value",
+                "population_coverage",
+                "record_consistency",
+            ],
+        },
+        "claim_subject": {"type": "string", "maxLength": 500},
+        "claim_value": {"type": "string", "maxLength": 500},
     },
 }
 
@@ -82,6 +97,12 @@ class Finding:
     # continue to deserialize unchanged.
     origin: str = "legacy"
     rule_hint: str = ""
+    # Controlled assertion/claim fields. Defaults preserve old constructors
+    # and stored V1 payloads; the taxonomy adapter fills them before export.
+    assertion_id: str = ""
+    claim_type: str = ""
+    claim_subject: str = ""
+    claim_value: str = ""
 
 
 @dataclass(frozen=True)

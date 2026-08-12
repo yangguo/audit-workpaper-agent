@@ -108,6 +108,8 @@ def test_check_attachment_references_flags_missing_index():
     assert len(findings) == 1
     assert findings[0].issue_type == "附件证据引用未匹配到附件目录"
     assert findings[0].severity == "P2"
+    assert findings[0].assertion_id == "attachment.inventory.presence"
+    assert findings[0].claim_subject == "SA-1|attachment:索引9"
 
 
 def test_check_attachment_references_empty_preview_returns_empty(layout_workbook):

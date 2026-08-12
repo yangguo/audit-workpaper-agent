@@ -358,6 +358,28 @@ async def test_run_review_assigns_static_taxonomy_to_deterministic_findings(monk
 
 
 @pytest.mark.asyncio
+async def test_run_review_assigns_controlled_assertion_and_claim(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    wb.active.title = "SA-4c"
+    wb.active["A1"] = "管理员账号识别情况"
+
+    findings, _ = await run_review(
+        wb=wb,
+        checkpoints={},
+        attachments_preview={},
+        sheets=None,
+        llm=_FakeLLM(_pass_review_payload()),
+    )
+
+    finding = findings[0]
+    assert finding["assertion_id"] == "scope.privileged_account.coverage"
+    assert finding["claim_type"] == "population_coverage"
+    assert finding["claim_subject"] == "SA-4c|scope:privileged_account_scope"
+    assert finding["claim_value"] == "coverage_insufficient"
+
+
+@pytest.mark.asyncio
 async def test_run_review_records_gate_status_for_non_p0_findings(monkeypatch):
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
     monkeypatch.setenv("REVIEW_DETERMINISTIC_CROSSCHECK_MODE", "all_findings")

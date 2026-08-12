@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -172,6 +172,7 @@ async def _llm_request_json_list(
     user_prompt: str,
     stage: str,
     max_attempts: int = 2,
+    allowed_assertion_ids: Collection[str] | None = None,
 ) -> Tuple[Optional[List[Any]], Optional[str]]:
     """Call the LLM expecting a JSON list response ({results: [...]}).
 
@@ -208,12 +209,16 @@ async def _llm_request_json_list(
                 parsed = parsed.get("results") or parsed.get("data") or parsed.get("items")
             if not isinstance(parsed, list):
                 raise RuntimeError("LLM返回非JSON results 数组")
-            valid_items, needs_retry = _validate_llm_results(parsed)
+            valid_items, needs_retry = _validate_llm_results(
+                parsed, allowed_assertion_ids=allowed_assertion_ids
+            )
             if needs_retry:
                 last_validation_errors = []
                 for obj in parsed:
                     if isinstance(obj, dict):
-                        ok, errs = _validate_finding_result(obj)
+                        ok, errs = _validate_finding_result(
+                            obj, allowed_assertion_ids=allowed_assertion_ids
+                        )
                         if not ok:
                             last_validation_errors.extend(errs)
                 if not last_validation_errors:

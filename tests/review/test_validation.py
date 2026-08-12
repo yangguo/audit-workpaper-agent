@@ -41,6 +41,42 @@ def test_validate_fail_with_evidence_is_valid():
     assert ok, errors
 
 
+def test_validate_rejects_llm_assertion_outside_its_allow_list():
+    ok, errors = _validate_finding_result(
+        {
+            "status": "fail",
+            "conclusion": "有问题结论",
+            "evidence_refs": [{"cell_or_range": "A1"}],
+            "severity": "P0",
+            "risk_type": "证据不足",
+            "assertion_id": "attachment.reference.mapping",
+        },
+        allowed_assertion_ids={"finding.unclassified"},
+    )
+
+    assert not ok
+    assert "assertion_id is not in the producer allow-list" in errors
+
+
+def test_llm_result_repairs_unapproved_assertion_to_human_review_fallback():
+    valid, needs_retry = _validate_llm_results(
+        [
+            {
+                "status": "fail",
+                "conclusion": "有问题结论",
+                "evidence_refs": [{"cell_or_range": "A1"}],
+                "severity": "P1",
+                "risk_type": "证据不足",
+                "assertion_id": "invented.free_text_category",
+            }
+        ],
+        allowed_assertion_ids={"finding.unclassified"},
+    )
+
+    assert needs_retry is False
+    assert valid[0]["assertion_id"] == "finding.unclassified"
+
+
 def test_validate_unknown_requires_reason_and_severity():
     ok, _ = _validate_finding_result({
         "status": "unknown", "conclusion": "不确定结论",

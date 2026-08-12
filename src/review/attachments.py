@@ -27,6 +27,7 @@ from review.excel_utils import (
     _normalize_sheet_id,
     _truncate,
 )
+from review.finding_taxonomy import deterministic_finding_fields
 from review.models import AttachmentFile, AttachmentPreviewItem, Finding
 
 ATTACHMENT_FILE_RE = re.compile(
@@ -948,6 +949,19 @@ def _check_attachment_references(ws_title: str, ws, attachments: Dict[str, objec
                         1200,
                     ),
                     suggestion="核对底稿中的附件编号/文件名/路径是否与附件目录一致；如存在重命名或遗漏，请补齐目录或更新引用。",
+                    **deterministic_finding_fields(
+                        origin="attachment_reference",
+                        rule_hint="attachment_reference_missing",
+                        assertion_id="attachment.inventory.presence",
+                        sheet=ws_title,
+                        cell=coord,
+                        claim_subject=(
+                            f"{ws_title}|attachment:{sorted({m for m in missing if m})[0]}"
+                            if any(m for m in missing)
+                            else ""
+                        ),
+                        claim_value="absent",
+                    ),
                 )
             )
         bad = [
@@ -970,6 +984,15 @@ def _check_attachment_references(ws_title: str, ws, attachments: Dict[str, objec
                         1200,
                     ),
                     suggestion="检查该附件是否为图片、扫描件或不支持的格式；必要时补充可检索版本，或配置 OCR/视觉模型后重新审阅。",
+                    **deterministic_finding_fields(
+                        origin="attachment_reference",
+                        rule_hint="attachment_text_unavailable",
+                        assertion_id="attachment.content.support",
+                        sheet=ws_title,
+                        cell=coord,
+                        claim_subject=f"{ws_title}|attachment:{it.rel_path or it.filename}",
+                        claim_value="unavailable",
+                    ),
                 )
             )
 
