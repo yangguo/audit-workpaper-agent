@@ -2,6 +2,7 @@ from review.remediation import (
     annotate_finding_groups,
     build_remediation,
 )
+from review.remediation_catalog import load_remediation_catalog
 
 
 def _finding(
@@ -171,22 +172,26 @@ def test_grouping_preserves_existing_v1_finding_id():
 def test_build_remediation_marks_generic_suggestion_for_human_refinement():
     remediation = build_remediation(
         {
+            "assertion_id": "finding.unclassified",
             "risk_type": "证据不足",
             "suggestion": "建议补充完整证据",
             "sheet": "SA-1",
             "cell": "C5",
-        }
+        },
+        catalog=load_remediation_catalog(),
     )
 
     assert remediation["status"] == "needs_human_refinement"
-    assert "action" in remediation["missing_fields"]
-    assert remediation["required_evidence"]
+    assert "trusted_template" in remediation["missing_fields"]
+    assert remediation["required_evidence"] == []
 
 
 def test_build_remediation_returns_actionable_structured_result():
-    remediation = build_remediation(_finding("f-1"))
+    remediation = build_remediation(
+        _finding("f-1"), catalog=load_remediation_catalog()
+    )
 
     assert remediation["status"] == "actionable"
     assert remediation["action"]
-    assert remediation["required_evidence"] == ["权限清单、复核记录"]
-    assert remediation["acceptance_criteria"] == ["抽样记录与完整范围一致"]
+    assert remediation["required_evidence"]
+    assert remediation["acceptance_criteria"]

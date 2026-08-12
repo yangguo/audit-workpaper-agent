@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import json
+import shutil
 import threading
+from pathlib import Path
 
 import openpyxl
 import pytest
@@ -276,7 +278,89 @@ async def test_execution_manifest_records_assertion_catalog_component(tmp_path):
     assert manifest is not None
     assert {
         component["component_id"] for component in manifest["components"]
-    } >= {"review-quality-assertions"}
+    } >= {"review-quality-assertions", "review-quality-remediation"}
+
+
+@pytest.mark.asyncio
+async def test_remediation_acceptance_criteria_change_execution_fingerprint(
+    monkeypatch, tmp_path
+):
+    catalog_root = tmp_path / "catalog-root"
+    source_root = Path(runner.__file__).resolve().parents[2] / "policy_packs"
+    shutil.copytree(source_root, catalog_root)
+    monkeypatch.setenv("REVIEW_ASSERTION_CATALOG_ROOT", str(catalog_root))
+    workpaper = _make_workbook(tmp_path)
+
+    first_review_id = await start_review(file_path=workpaper, source="wp.xlsx")
+    await _REGISTRY[first_review_id]["task"]
+    first_manifest = ReviewArtifactStore().load_manifest(first_review_id)
+    assert first_manifest is not None
+
+    templates_path = (
+        catalog_root
+        / "review-quality"
+        / "1.0.0"
+        / "remediation-templates.json"
+    )
+    templates = json.loads(templates_path.read_text(encoding="utf-8"))
+    templates["templates"][0]["acceptance_criteria"][0] += "（已更新）"
+    templates_path.write_text(
+        json.dumps(templates, ensure_ascii=False), encoding="utf-8"
+    )
+
+    second_review_id = await start_review(file_path=workpaper, source="wp.xlsx")
+    await _REGISTRY[second_review_id]["task"]
+    second_manifest = ReviewArtifactStore().load_manifest(second_review_id)
+    assert second_manifest is not None
+
+    first_components = {
+        component["component_id"]: component["sha256"]
+        for component in first_manifest["components"]
+    }
+    second_components = {
+        component["component_id"]: component["sha256"]
+        for component in second_manifest["components"]
+    }
+    assert (
+        first_components["review-quality-remediation"]
+        != second_components["review-quality-remediation"]
+    )
+    assert first_manifest["execution_sha256"] != second_manifest["execution_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_remediation_catalog_keeps_v1_and_marks_quality_error(
+    monkeypatch, tmp_path
+):
+    catalog_root = tmp_path / "catalog-root"
+    source_root = Path(runner.__file__).resolve().parents[2] / "policy_packs"
+    shutil.copytree(source_root, catalog_root)
+    templates_path = (
+        catalog_root
+        / "review-quality"
+        / "1.0.0"
+        / "remediation-templates.json"
+    )
+    templates = json.loads(templates_path.read_text(encoding="utf-8"))
+    templates["templates"][0]["acceptance_criteria"] = []
+    templates_path.write_text(
+        json.dumps(templates, ensure_ascii=False), encoding="utf-8"
+    )
+    monkeypatch.setenv("REVIEW_ASSERTION_CATALOG_ROOT", str(catalog_root))
+
+    review_id = await start_review(file_path=_make_workbook(tmp_path), source="wp.xlsx")
+    await _REGISTRY[review_id]["task"]
+
+    payload = load_findings(review_id)
+    assert payload is not None
+    assert get_status(review_id)["status"] == "completed"
+    remediation_catalog = payload["stats"]["quality"]["remediation_catalog"]
+    assert remediation_catalog["status"] == "error"
+    assert "RemediationCatalogError" in remediation_catalog["error"]
+    assert {
+        finding["quality"]["remediation"]["status"]
+        for finding in payload["findings"]
+    } == {"not_available"}
 
 
 @pytest.mark.asyncio

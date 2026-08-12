@@ -38,6 +38,9 @@ class AssertionPackManifest(BaseModel):
     version: str = Field(min_length=5, max_length=40)
     title: str = Field(min_length=1, max_length=200)
     assertions_file: str = Field(min_length=1, max_length=160)
+    remediation_templates_file: str = Field(
+        default="remediation-templates.json", min_length=1, max_length=160
+    )
 
     @field_validator("id")
     @classmethod
@@ -61,6 +64,20 @@ class AssertionPackManifest(BaseModel):
         path = Path(value.replace("\\", "/"))
         if path.is_absolute() or ".." in path.parts or path.name != "assertions.json":
             raise ValueError("assertions_file must be the local assertions.json")
+        return path.as_posix()
+
+    @field_validator("remediation_templates_file")
+    @classmethod
+    def _safe_remediation_templates_file(cls, value: str) -> str:
+        path = Path(value.replace("\\", "/"))
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or path.name != "remediation-templates.json"
+        ):
+            raise ValueError(
+                "remediation_templates_file must be the local remediation-templates.json"
+            )
         return path.as_posix()
 
 

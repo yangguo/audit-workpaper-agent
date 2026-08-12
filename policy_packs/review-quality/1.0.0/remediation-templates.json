@@ -1,0 +1,83 @@
+{
+  "id": "review-quality",
+  "version": "1.0.0",
+  "templates": [
+    {
+      "template_id": "attachment_content_support",
+      "assertion_ids": ["attachment.content.support"],
+      "action": "补充可检索且可复现的附件原文或 OCR 结果，并将底稿结论逐项关联至附件摘录。",
+      "required_evidence": ["冻结附件原件", "可检索文本或 OCR 结果", "唯一匹配的原文摘录及定位"],
+      "acceptance_criteria": ["附件文件 hash 可复现", "每项结论均可定位到唯一原文摘录", "无法解析的附件已说明限制或完成替换"]
+    },
+    {
+      "template_id": "attachment_inventory_presence",
+      "assertion_ids": ["attachment.inventory.presence"],
+      "action": "核对底稿附件引用与冻结附件目录，补充缺失文件或更正错误引用。",
+      "required_evidence": ["附件目录与文件清单", "缺失附件原件或更正后的底稿引用", "引用核对记录"],
+      "acceptance_criteria": ["每个底稿附件引用均能唯一定位到冻结文件", "缺失或重命名文件已完成更正说明", "引用核对记录经复核"]
+    },
+    {
+      "template_id": "attachment_reference_mapping",
+      "assertion_ids": ["attachment.reference.mapping"],
+      "action": "核对证据编号、文件名和底稿引用的对应关系，纠正不一致并保留核验轨迹。",
+      "required_evidence": ["证据编号对照表", "对应附件原件", "更新后的底稿引用记录"],
+      "acceptance_criteria": ["证据编号、文件名和底稿引用一一对应", "每个引用均可复现到冻结来源", "差异更正已完成复核"]
+    },
+    {
+      "template_id": "configuration_asset_coverage",
+      "assertion_ids": ["configuration.asset_coverage.support"],
+      "action": "补充防病毒资产范围、策略配置与覆盖结果的核验记录，并处置未覆盖资产。",
+      "required_evidence": ["受管资产范围清单", "防病毒策略配置导出", "防病毒部署与覆盖结果", "未覆盖资产的异常处置记录"],
+      "acceptance_criteria": ["资产范围、策略配置和覆盖结果已完成勾稽", "范围内资产均有覆盖状态或经批准的例外", "未覆盖资产已完成处置或形成经批准的风险接受"]
+    },
+    {
+      "template_id": "population_sample_size",
+      "assertion_ids": ["population.sample_size.present"],
+      "action": "补充总体、样本量及抽样依据，并重新核验样本覆盖是否满足审计程序。",
+      "required_evidence": ["总体清单", "样本抽取记录", "样本量计算或抽样依据"],
+      "acceptance_criteria": ["总体边界和期间已明确", "样本量及抽样方法可复现", "样本覆盖结论经复核"]
+    },
+    {
+      "template_id": "privileged_account_coverage",
+      "assertion_ids": ["scope.privileged_account.coverage"],
+      "action": "补充特权账号完整范围、识别规则和复核记录，并核验范围内账号均已纳入测试。",
+      "required_evidence": ["特权账号完整清单", "账号识别规则或系统导出说明", "范围核对与复核记录"],
+      "acceptance_criteria": ["特权账号范围与系统来源可勾稽", "范围内账号均已纳入测试或有批准例外", "复核记录完整且可追溯"]
+    },
+    {
+      "template_id": "procedure_execution_correspondence",
+      "assertion_ids": ["procedure.execution.correspondence"],
+      "action": "补充实际执行程序与标准审计程序的对应说明，并完善偏差处理和复核痕迹。",
+      "required_evidence": ["标准审计程序", "实际执行记录", "程序偏差说明及复核记录"],
+      "acceptance_criteria": ["每项标准程序均有对应执行记录", "程序偏差已说明原因和替代程序", "对应关系经复核"]
+    },
+    {
+      "template_id": "procedure_required_evidence",
+      "assertion_ids": ["procedure.required_evidence"],
+      "action": "补充审计程序要求的原始证据，并将证据与执行步骤和结论建立明确对应。",
+      "required_evidence": ["审计程序要求的原始证据", "执行步骤记录", "证据与结论对应表"],
+      "acceptance_criteria": ["每项执行步骤均有对应原始证据", "证据来源和定位可复现", "结论与证据对应关系经复核"]
+    },
+    {
+      "template_id": "record_field_consistency",
+      "assertion_ids": ["record.field.consistency"],
+      "action": "核对记录字段与来源系统数据，修正不一致项并保留差异解释和复核记录。",
+      "required_evidence": ["来源系统导出", "字段勾稽表", "差异解释及更正记录"],
+      "acceptance_criteria": ["关键字段与来源系统数据一致", "所有差异均已更正或有批准解释", "字段勾稽结果经复核"]
+    },
+    {
+      "template_id": "record_period_date_consistency",
+      "assertion_ids": ["record.period_date.consistency"],
+      "action": "核对记录日期与审计期间，修正跨期或日期不一致项并保留复核结论。",
+      "required_evidence": ["审计期间依据", "来源记录日期字段", "日期勾稽与差异处理记录"],
+      "acceptance_criteria": ["记录日期与审计期间边界一致", "跨期项目均有批准解释", "日期勾稽结果经复核"]
+    },
+    {
+      "template_id": "vendor_hosting_evidence",
+      "assertion_ids": ["scope.vendor_hosting.evidence"],
+      "action": "补充供应商托管场景的责任边界、控制证据和例外处置记录。",
+      "required_evidence": ["供应商服务与责任边界说明", "供应商控制证明或审计报告", "例外评估与处置记录"],
+      "acceptance_criteria": ["托管责任边界已明确", "相关控制证据覆盖审计期间", "例外风险已完成评估和批准"]
+    }
+  ]
+}

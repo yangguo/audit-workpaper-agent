@@ -2,5 +2,6 @@
   "id": "review-quality",
   "version": "1.0.0",
   "title": "Review Quality Assertions",
-  "assertions_file": "assertions.json"
+  "assertions_file": "assertions.json",
+  "remediation_templates_file": "remediation-templates.json"
 }

@@ -7,6 +7,7 @@ import json
 from typing import Any, Iterable, Mapping
 
 from review.finding_taxonomy import default_assertion_catalog
+from review.remediation_catalog import RemediationCatalog
 from review.result_quality import (
     canonicalize_evidence_refs,
     stable_finding_id,
@@ -20,15 +21,6 @@ _GENERIC_SUGGESTIONS = {
     "建议补充证据",
     "请补充相关证据",
 }
-
-_REQUIRED_BY_RISK = {
-    "覆盖性": ["完整范围清单、抽样依据和执行记录"],
-    "一致性": ["来源系统导出、底稿勾稽表和差异解释"],
-    "证据不足": ["与该控制点直接对应的原始证据"],
-    "方法性": ["审计程序、执行记录和复核痕迹"],
-    "跨字段一致性": ["相关字段的来源记录和勾稽说明"],
-}
-
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -261,47 +253,43 @@ def grouping_stats(findings: Iterable[Mapping[str, Any]]) -> dict[str, int]:
     }
 
 
-def _detail(finding: Mapping[str, Any]) -> dict[str, Any]:
-    value = finding.get("fix_suggestion_detail") or finding.get("fix_suggestion") or {}
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            value = {}
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def build_remediation(finding: Mapping[str, Any]) -> dict[str, Any]:
-    """Return deterministic remediation fields without inventing ownership."""
+def _reference_suggestion(finding: Mapping[str, Any]) -> str:
+    """Keep a non-generic source suggestion as human context, never as policy."""
 
     suggestion = _text(finding.get("suggestion"))
-    detail = _detail(finding)
-    required_value = detail.get("required_evidence_type")
-    required = [_text(required_value)] if _text(required_value) else list(
-        _REQUIRED_BY_RISK.get(_text(finding.get("risk_type")), [])
-    )
-    required = [item for item in required if item]
-    acceptance_value = detail.get("acceptance_criteria") or detail.get("acceptance")
-    if isinstance(acceptance_value, list):
-        acceptance = [_text(item) for item in acceptance_value if _text(item)]
-    elif _text(acceptance_value):
-        acceptance = [_text(acceptance_value)]
-    else:
-        acceptance = []
-    generic = suggestion in _GENERIC_SUGGESTIONS or len(suggestion) < 8
-    missing: list[str] = []
-    action = "" if generic else suggestion
+    if suggestion in _GENERIC_SUGGESTIONS or len(suggestion) < 8:
+        return ""
+    return suggestion
+
+
+def build_remediation(
+    finding: Mapping[str, Any], *, catalog: RemediationCatalog
+) -> dict[str, Any]:
+    """Return only assertion-bound, repository-owned executable remediation.
+
+    Free-form model and legacy suggestions may be retained as reference context
+    for a human, but they never create required evidence or acceptance criteria.
+    """
+
+    template = catalog.template_for_assertion(_text(finding.get("assertion_id")))
+    if template is not None:
+        return {
+            "status": "actionable",
+            "action": template.action,
+            "required_evidence": list(template.required_evidence),
+            "acceptance_criteria": list(template.acceptance_criteria),
+            "missing_fields": [],
+        }
+
+    action = _reference_suggestion(finding)
+    missing = ["trusted_template", "required_evidence", "acceptance_criteria"]
     if not action:
-        missing.append("action")
-    if not required:
-        missing.append("required_evidence")
-    if not acceptance:
-        missing.append("acceptance_criteria")
+        missing.insert(0, "action")
     return {
-        "status": "actionable" if not missing else "needs_human_refinement",
+        "status": "needs_human_refinement",
         "action": action,
-        "required_evidence": required,
-        "acceptance_criteria": acceptance,
+        "required_evidence": [],
+        "acceptance_criteria": [],
         "missing_fields": missing,
     }
 
@@ -311,6 +299,7 @@ def enrich_finding_quality(
     *,
     input_set_sha256: str = "",
     input_sha256: str = "",
+    catalog: RemediationCatalog,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     rows = annotate_finding_groups(
         findings,
@@ -319,6 +308,6 @@ def enrich_finding_quality(
     )
     for row in rows:
         quality = dict(row.get("quality") or {})
-        quality["remediation"] = build_remediation(row)
+        quality["remediation"] = build_remediation(row, catalog=catalog)
         row["quality"] = quality
     return rows, grouping_stats(rows)

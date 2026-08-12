@@ -48,7 +48,18 @@ from review.policy import load_policy_pack
 from review.pipeline import run_review
 from review.quality_gates import build_quality_gate_context
 from review.result_quality import build_quality_envelope
-from review.remediation import enrich_finding_quality
+from review.remediation import (
+    annotate_finding_groups,
+    enrich_finding_quality,
+    grouping_stats,
+)
+from review.remediation_catalog import (
+    RemediationCatalog,
+    RemediationCatalogError,
+    load_remediation_catalog,
+    remediation_catalog_directory,
+    validate_remediation_bindings,
+)
 from storage.findings_store import load_findings, save_findings
 from storage.review_artifact_store import ReviewArtifactStore
 
@@ -112,6 +123,23 @@ def _assertion_catalog_component(
         component_id="review-quality-assertions",
         version=version,
         path=catalog_dir / "assertions.json",
+    )
+
+
+def _remediation_catalog_component(
+    *, pack_id: str, version: str, root: str | None
+) -> ExecutionComponentRef:
+    """Fingerprint the complete static remediation declaration directory."""
+
+    catalog_dir = remediation_catalog_directory(
+        pack_id=pack_id,
+        version=version,
+        root=root,
+    )
+    return component_ref_from_path(
+        component_id="review-quality-remediation",
+        version=version,
+        path=catalog_dir,
     )
 
 
@@ -446,6 +474,8 @@ async def _run_review(
         # component is unavailable. The fallback catalog classifies every
         # finding explicitly as unclassified / human-review-required.
         assertion_catalog: AssertionCatalog = fallback_assertion_catalog()
+        remediation_catalog: RemediationCatalog | None = None
+        remediation_catalog_error = ""
         try:
             snapshot_paths = await asyncio.to_thread(
                 store.snapshot_inputs,
@@ -491,6 +521,18 @@ async def _run_review(
                     version=assertion_catalog_version,
                     root=assertion_catalog_root,
                 )
+                try:
+                    remediation_catalog = load_remediation_catalog(
+                        pack_id=assertion_catalog_id,
+                        version=assertion_catalog_version,
+                        root=assertion_catalog_root,
+                    )
+                    validate_remediation_bindings(
+                        assertion_catalog, remediation_catalog
+                    )
+                except RemediationCatalogError as exc:
+                    remediation_catalog_error = f"{type(exc).__name__}: {exc}"
+                    raise
                 policy_pack = (
                     PolicyPackRef(id=policy_id, version=policy_version)
                     if policy_mode == "shadow"
@@ -506,6 +548,13 @@ async def _run_review(
                     _assertion_catalog_component(
                         pack_id=assertion_catalog_id,
                         version=assertion_catalog.version,
+                        root=assertion_catalog_root,
+                    )
+                )
+                components.append(
+                    _remediation_catalog_component(
+                        pack_id=assertion_catalog_id,
+                        version=remediation_catalog.version,
                         root=assertion_catalog_root,
                     )
                 )
@@ -558,6 +607,9 @@ async def _run_review(
                 store.begin(execution_context.manifest)
             except Exception as exc:
                 artifact_setup_error = f"{type(exc).__name__}: {exc}"
+                remediation_catalog_error = (
+                    remediation_catalog_error or artifact_setup_error
+                )
                 _logger.exception("review execution context %s failed", review_id)
                 entry = _REGISTRY.get(review_id)
                 if entry is not None:
@@ -659,14 +711,39 @@ async def _run_review(
                     ],
                     "total_conflicts": len(consistency_conflicts),
                 }
-                findings, grouping_stats = enrich_finding_quality(
-                    findings,
-                    input_set_sha256=str(
-                        quality_stats.get("input_set_sha256", "") or ""
-                    ),
-                    input_sha256=str(quality_stats.get("input_sha256", "") or ""),
+                input_set_sha256 = str(
+                    quality_stats.get("input_set_sha256", "") or ""
                 )
-                quality_stats.update(grouping_stats)
+                input_sha256 = str(quality_stats.get("input_sha256", "") or "")
+                if remediation_catalog is not None:
+                    findings, group_stats = enrich_finding_quality(
+                        findings,
+                        input_set_sha256=input_set_sha256,
+                        input_sha256=input_sha256,
+                        catalog=remediation_catalog,
+                    )
+                    quality_stats["remediation_catalog"] = {
+                        "status": "loaded",
+                        "id": remediation_catalog.id,
+                        "version": remediation_catalog.version,
+                    }
+                else:
+                    # Do not fabricate a risk-type remediation when the
+                    # versioned template source cannot be trusted.
+                    findings = annotate_finding_groups(
+                        findings,
+                        input_set_sha256=input_set_sha256,
+                        input_sha256=input_sha256,
+                    )
+                    group_stats = grouping_stats(findings)
+                    quality_stats["remediation_catalog"] = {
+                        "status": "error",
+                        "error": (
+                            remediation_catalog_error
+                            or "trusted remediation catalog unavailable"
+                        ),
+                    }
+                quality_stats.update(group_stats)
         except Exception as exc:
             # Quality metadata is additive. A malformed/temporarily
             # unavailable provenance index must not turn a completed V1 review
