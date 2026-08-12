@@ -397,3 +397,74 @@ def test_evaluation_fails_when_fail_finding_has_no_quality_envelope():
         failure["code"] == "missing_quality_envelope"
         for failure in result["failures"]
     )
+
+
+def test_v2_evaluation_matches_assertion_before_display_issue_type():
+    manifest = {
+        "schema_version": "review-quality/2",
+        "cases": [
+            {
+                "case_id": "case-v2",
+                "input_sha256": "sha-1",
+                "adjudication_status": "adjudicated",
+                "expected_findings": [
+                    {
+                        "match_key": {
+                            "assertion_id": "attachment.reference.mapping",
+                            "claim_subject": "SA-1|attachment:backup.docx",
+                        },
+                        "status": "fail",
+                        "severity": "P1",
+                    }
+                ],
+            }
+        ],
+    }
+    actual = {
+        "case-v2": [
+            {
+                "issue_type": "措辞完全不同",
+                "assertion_id": "attachment.reference.mapping",
+                "claim_subject": "SA-1|attachment:backup.docx",
+                "status": "fail",
+                "severity": "P1",
+                "quality": {
+                    "provenance": {"input_sha256": "sha-1"},
+                    "citation_validation": {"status": "not_available"},
+                    "gates": {},
+                },
+            }
+        ]
+    }
+
+    result = evaluate_quality_cases(manifest, actual)
+
+    assert result["metrics"]["finding_recall"] == 1.0
+    assert not any(failure["code"] == "missing_finding" for failure in result["failures"])
+
+
+def test_v2_evaluation_reports_a_non_mapping_match_key_without_crashing():
+    manifest = {
+        "schema_version": "review-quality/2",
+        "cases": [
+            {
+                "case_id": "case-invalid-key",
+                "input_sha256": "sha-1",
+                "adjudication_status": "adjudicated",
+                "expected_findings": [
+                    {
+                        "match_key": ["issue_type"],
+                        "status": "fail",
+                        "severity": "P1",
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = evaluate_quality_cases(manifest, {"case-invalid-key": []})
+
+    assert any(
+        failure["code"] == "invalid_controlled_match_key"
+        for failure in result["failures"]
+    )

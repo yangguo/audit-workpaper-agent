@@ -5,6 +5,7 @@ from review.result_quality import (
     build_quality_envelope,
     canonicalize_evidence_refs,
     derive_primary_location,
+    stable_finding_id,
     stable_legacy_finding_id,
 )
 
@@ -107,6 +108,32 @@ def test_stable_legacy_finding_id_changes_when_provenance_changes():
     assert first == same
     assert first.startswith("legacy:")
     assert first != changed
+
+
+def test_controlled_finding_id_ignores_display_text_but_tracks_claim_and_evidence():
+    base = dict(
+        input_set_sha256="input-set-1",
+        assertion_id="attachment.reference.mapping",
+        claim_subject="SA-11|attachment:backup.docx",
+        claim_value="reference_mismatch",
+        status="fail",
+        severity="P1",
+        verified_evidence_ids=["attachment:backup-1"],
+        origin="evidence_steps",
+    )
+    first = stable_finding_id(**base)
+    wording_changed = stable_finding_id(**base)
+    evidence_changed = stable_finding_id(
+        **{**base, "verified_evidence_ids": ["attachment:backup-2"]}
+    )
+    assertion_changed = stable_finding_id(
+        **{**base, "assertion_id": "record.period_date.consistency"}
+    )
+
+    assert first == wording_changed
+    assert first.startswith("finding:")
+    assert first != evidence_changed
+    assert first != assertion_changed
 
 
 def test_build_quality_envelope_is_additive_and_explicit_about_gate_states():

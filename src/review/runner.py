@@ -654,6 +654,9 @@ async def _run_review(
                 }
                 findings, grouping_stats = enrich_finding_quality(
                     findings,
+                    input_set_sha256=str(
+                        quality_stats.get("input_set_sha256", "") or ""
+                    ),
                     input_sha256=str(quality_stats.get("input_sha256", "") or ""),
                 )
                 quality_stats.update(grouping_stats)

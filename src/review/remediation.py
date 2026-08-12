@@ -6,7 +6,12 @@ import hashlib
 import json
 from typing import Any, Iterable, Mapping
 
-from review.result_quality import canonicalize_evidence_refs, stable_legacy_finding_id
+from review.finding_taxonomy import default_assertion_catalog
+from review.result_quality import (
+    canonicalize_evidence_refs,
+    stable_finding_id,
+    stable_legacy_finding_id,
+)
 
 
 _GENERIC_SUGGESTIONS = {
@@ -29,64 +34,138 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _refs(finding: Mapping[str, Any]) -> list[dict[str, Any]]:
-    raw = finding.get("evidence_refs") or []
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            raw = []
-    return canonicalize_evidence_refs(raw if isinstance(raw, list) else [])
+def _normalise_controlled_component(value: Any) -> str:
+    """Normalize controlled claim identifiers, never free-form display text."""
+
+    return "".join(_text(value).split()).casefold()
 
 
-def _finding_id(finding: Mapping[str, Any], input_sha256: str) -> str:
-    value = _text(finding.get("finding_id"))
+def _quality_mapping(finding: Mapping[str, Any]) -> Mapping[str, Any]:
+    quality = finding.get("quality")
+    return quality if isinstance(quality, Mapping) else {}
+
+
+def _verified_refs(finding: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Use only provenance-accepted evidence; raw V1 refs are not identity."""
+
+    citation = _quality_mapping(finding).get("citation_validation")
+    refs = citation.get("verified_refs") if isinstance(citation, Mapping) else []
+    return canonicalize_evidence_refs(refs if isinstance(refs, list) else [])
+
+
+def _verified_evidence_ids(finding: Mapping[str, Any]) -> list[str]:
+    citation = _quality_mapping(finding).get("citation_validation")
+    if not isinstance(citation, Mapping):
+        return []
+    ids = {
+        _text(value)
+        for value in citation.get("evidence_ids", [])
+        if _text(value)
+    }
+    ids.update(
+        _text(ref.get("evidence_id"))
+        for ref in _verified_refs(finding)
+        if _text(ref.get("evidence_id"))
+    )
+    return sorted(ids)
+
+
+def _input_set_sha256(finding: Mapping[str, Any], fallback: str = "") -> str:
+    provenance = _quality_mapping(finding).get("provenance")
+    if isinstance(provenance, Mapping) and _text(provenance.get("input_set_sha256")):
+        return _text(provenance.get("input_set_sha256"))
+    return _text(fallback)
+
+
+def _controlled_claim_ready(finding: Mapping[str, Any], input_set_sha256: str) -> bool:
+    return bool(
+        _text(input_set_sha256)
+        and _text(finding.get("assertion_id"))
+        and _text(finding.get("claim_subject"))
+        and _text(finding.get("claim_value"))
+        and _verified_evidence_ids(finding)
+    )
+
+
+def _finding_id(
+    finding: Mapping[str, Any], *, input_set_sha256: str, input_sha256: str
+) -> str:
+    active_set = _input_set_sha256(finding, input_set_sha256)
+    if _controlled_claim_ready(finding, active_set):
+        return stable_finding_id(
+            input_set_sha256=active_set,
+            assertion_id=_text(finding.get("assertion_id")),
+            claim_subject=_text(finding.get("claim_subject")),
+            claim_value=_text(finding.get("claim_value")),
+            status=_text(finding.get("status")),
+            severity=_text(finding.get("severity")),
+            verified_evidence_ids=_verified_evidence_ids(finding),
+            origin=_text(finding.get("origin")) or "legacy",
+        )
+    value = _text(finding.get("finding_id")) or _text(
+        _quality_mapping(finding).get("finding_id")
+    )
     if value:
         return value
-    quality = finding.get("quality")
-    if isinstance(quality, Mapping) and _text(quality.get("finding_id")):
-        return _text(quality.get("finding_id"))
     return stable_legacy_finding_id(
         input_sha256=input_sha256,
         issue_type=_text(finding.get("issue_type")),
         sheet=_text(finding.get("sheet")),
         cell=finding.get("cell"),
         status=_text(finding.get("status")),
-        evidence_refs=_refs(finding),
+        evidence_refs=_verified_refs(finding),
         origin=_text(finding.get("origin")) or "legacy",
     )
 
 
-def _fingerprint(finding: Mapping[str, Any]) -> str:
+def exact_duplicate_fingerprint(
+    finding: Mapping[str, Any], *, input_set_sha256: str = ""
+) -> str | None:
+    """Return a duplicate key only when controlled identity is complete."""
+
+    input_set = _input_set_sha256(finding, input_set_sha256)
+    if not _controlled_claim_ready(finding, input_set):
+        return None
     material = {
-        "origin": _text(finding.get("origin")) or "legacy",
-        "rule_hint": _text(finding.get("rule_hint")),
-        "issue_type": _text(finding.get("issue_type")),
-        "risk_type": _text(finding.get("risk_type")),
-        "sheet": _text(finding.get("sheet")),
-        "cell": _text(finding.get("cell")),
+        "schema_version": "review-exact-duplicate/2",
+        "input_set_sha256": input_set,
+        "assertion_id": _normalise_controlled_component(finding.get("assertion_id")),
+        "claim_subject": _normalise_controlled_component(finding.get("claim_subject")),
+        "claim_value": _normalise_controlled_component(finding.get("claim_value")),
         "status": _text(finding.get("status")),
         "severity": _text(finding.get("severity")),
-        "evidence_ids": sorted(
-            _text(ref.get("evidence_id"))
-            for ref in _refs(finding)
-            if _text(ref.get("evidence_id"))
-        ),
+        "origin": _text(finding.get("origin")) or "legacy",
+        "sheet": _text(finding.get("sheet")),
+        "verified_evidence_ids": _verified_evidence_ids(finding),
     }
     return hashlib.sha256(
         json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
-def _root_key(finding: Mapping[str, Any]) -> str | None:
-    rule_hint = _text(finding.get("rule_hint"))
-    if not rule_hint:
+def root_cause_key(
+    finding: Mapping[str, Any], *, input_set_sha256: str = ""
+) -> str | None:
+    """Group only catalog-linked assertion families within one input scope."""
+
+    assertion = default_assertion_catalog().maybe_assertion(
+        _text(finding.get("assertion_id"))
+    )
+    input_set = _input_set_sha256(finding, input_set_sha256)
+    subject = _normalise_controlled_component(finding.get("claim_subject"))
+    if (
+        assertion is None
+        or not assertion.root_family
+        or not input_set
+        or not subject
+        or not _verified_evidence_ids(finding)
+    ):
         return None
     material = {
-        "origin": _text(finding.get("origin")) or "legacy",
-        "rule_hint": rule_hint,
-        "sheet": _text(finding.get("sheet")),
-        "risk_type": _text(finding.get("risk_type")),
+        "schema_version": "review-root-cause/2",
+        "input_set_sha256": input_set,
+        "root_family": assertion.root_family,
+        "claim_subject": subject,
     }
     return hashlib.sha256(
         json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -96,36 +175,41 @@ def _root_key(finding: Mapping[str, Any]) -> str | None:
 def annotate_finding_groups(
     findings: Iterable[Mapping[str, Any]],
     *,
+    input_set_sha256: str = "",
     input_sha256: str = "",
 ) -> list[dict[str, Any]]:
     """Annotate rows without deleting raw findings or merging by cell alone."""
 
     rows = [dict(item) for item in findings if isinstance(item, Mapping)]
-    identifiers = [_finding_id(row, input_sha256) for row in rows]
-    fingerprint_first: dict[str, str] = {}
+    identifiers = [
+        _finding_id(
+            row,
+            input_set_sha256=input_set_sha256,
+            input_sha256=input_sha256,
+        )
+        for row in rows
+    ]
     root_members: dict[str, list[str]] = {}
     root_by_index: list[str | None] = []
     duplicate_by_index: list[str | None] = []
     for row, finding_id in zip(rows, identifiers):
-        fingerprint = _fingerprint(row)
-        duplicate_of = fingerprint_first.setdefault(fingerprint, finding_id)
-        if duplicate_of == finding_id and fingerprint in fingerprint_first:
-            # The first member is canonical; a repeated generated ID still
-            # gets a deterministic duplicate marker only after the first row.
-            duplicate_of = None if list(fingerprint_first.values()).count(finding_id) == 1 else finding_id
-        root_key = _root_key(row)
+        root_key = root_cause_key(row, input_set_sha256=input_set_sha256)
         root_id = f"root:{root_key[:32]}" if root_key else None
         if root_id:
             root_members.setdefault(root_id, []).append(finding_id)
         root_by_index.append(root_id)
-        duplicate_by_index.append(duplicate_of)
+        duplicate_by_index.append(None)
 
-    # The setdefault trick above cannot distinguish two rows with different
-    # IDs when a pre-existing ID is reused, so recompute duplicate markers by
-    # stable first occurrence index for clarity.
+    # Mark duplicates by stable first occurrence, rather than by a mutable
+    # display field or an existing V1 identifier.
     seen_fingerprints: dict[str, str] = {}
     for index, row in enumerate(rows):
-        fingerprint = _fingerprint(row)
+        fingerprint = exact_duplicate_fingerprint(
+            row, input_set_sha256=input_set_sha256
+        )
+        if fingerprint is None:
+            duplicate_by_index[index] = None
+            continue
         duplicate_by_index[index] = seen_fingerprints.get(fingerprint)
         seen_fingerprints.setdefault(fingerprint, identifiers[index])
 
@@ -144,7 +228,7 @@ def annotate_finding_groups(
                 ),
             }
         )
-        quality["finding_id"] = quality.get("finding_id") or identifiers[index]
+        quality["finding_id"] = identifiers[index]
         quality["grouping"] = grouping
         row["finding_id"] = row.get("finding_id") or identifiers[index]
         row["quality"] = quality
@@ -225,9 +309,14 @@ def build_remediation(finding: Mapping[str, Any]) -> dict[str, Any]:
 def enrich_finding_quality(
     findings: Iterable[Mapping[str, Any]],
     *,
+    input_set_sha256: str = "",
     input_sha256: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    rows = annotate_finding_groups(findings, input_sha256=input_sha256)
+    rows = annotate_finding_groups(
+        findings,
+        input_set_sha256=input_set_sha256,
+        input_sha256=input_sha256,
+    )
     for row in rows:
         quality = dict(row.get("quality") or {})
         quality["remediation"] = build_remediation(row)

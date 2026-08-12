@@ -151,7 +151,10 @@ async def test_review_quality_shadow_adds_provenance_without_changing_legacy_fie
     assert finding["quality"]["claim_support"]["status"] == "unsupported"
     assert finding["quality"]["disposition"]["original_status"] == "fail"
     assert finding["quality"]["disposition"]["effective_status"] == "fail"
-    assert finding["quality"]["grouping"]["root_cause_id"]
+    # A legacy finding with unsupported claim evidence must remain visible but
+    # unclustered. Grouping requires a controlled assertion and verified
+    # evidence identity; the shadow pipeline must not infer either from text.
+    assert finding["quality"]["grouping"]["root_cause_id"] is None
     assert finding["quality"]["remediation"]["status"] in {
         "actionable",
         "needs_human_refinement",

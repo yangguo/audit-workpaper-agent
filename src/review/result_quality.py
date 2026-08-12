@@ -233,6 +233,42 @@ def derive_primary_location(
     return None
 
 
+def _normalise_claim_component(value: Any) -> str:
+    """Normalize only compact controlled claim keys, never display prose."""
+
+    return "".join(_string(value).split()).casefold()
+
+
+def stable_finding_id(
+    *,
+    input_set_sha256: str,
+    assertion_id: str,
+    claim_subject: str,
+    claim_value: str,
+    status: str,
+    severity: str,
+    verified_evidence_ids: Sequence[str],
+    origin: str,
+) -> str:
+    """Return an assertion/claim/evidence based stable finding identity."""
+
+    material = {
+        "schema_version": "review-finding/2",
+        "input_set_sha256": _string(input_set_sha256),
+        "assertion_id": _normalise_claim_component(assertion_id),
+        "claim_subject": _normalise_claim_component(claim_subject),
+        "claim_value": _normalise_claim_component(claim_value),
+        "status": _string(status),
+        "severity": _string(severity),
+        "verified_evidence_ids": sorted(
+            {_string(value) for value in verified_evidence_ids if _string(value)}
+        ),
+        "origin": _string(origin) or "legacy",
+    }
+    digest = hashlib.sha256(_json_key(material).encode("utf-8")).hexdigest()
+    return f"finding:{digest[:32]}"
+
+
 def stable_legacy_finding_id(
     *,
     input_sha256: str,
@@ -294,15 +330,34 @@ def build_quality_envelope(
             if _string(ref.get("evidence_id"))
         }
     )
-    finding_id = stable_legacy_finding_id(
-        input_sha256=input_sha256,
-        issue_type=_string(finding.get("issue_type")),
-        sheet=_string(finding.get("sheet")),
-        cell=finding.get("cell"),
-        status=_string(finding.get("status")),
-        evidence_refs=refs,
-        origin=_string(finding.get("origin")) or "legacy",
+    controlled_identity = (
+        _string(input_set_sha256)
+        and _normalise_claim_component(finding.get("assertion_id"))
+        and _normalise_claim_component(finding.get("claim_subject"))
+        and _normalise_claim_component(finding.get("claim_value"))
+        and bool(evidence_ids)
     )
+    if controlled_identity:
+        finding_id = stable_finding_id(
+            input_set_sha256=input_set_sha256,
+            assertion_id=_string(finding.get("assertion_id")),
+            claim_subject=_string(finding.get("claim_subject")),
+            claim_value=_string(finding.get("claim_value")),
+            status=_string(finding.get("status")),
+            severity=_string(finding.get("severity")),
+            verified_evidence_ids=evidence_ids,
+            origin=_string(finding.get("origin")) or "legacy",
+        )
+    else:
+        finding_id = stable_legacy_finding_id(
+            input_sha256=input_sha256,
+            issue_type=_string(finding.get("issue_type")),
+            sheet=_string(finding.get("sheet")),
+            cell=finding.get("cell"),
+            status=_string(finding.get("status")),
+            evidence_refs=refs,
+            origin=_string(finding.get("origin")) or "legacy",
+        )
     payload = FindingQuality(
         finding_id=finding_id,
         primary_location=derive_primary_location(finding, refs),

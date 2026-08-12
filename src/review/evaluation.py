@@ -29,10 +29,35 @@ def _finding_matches(expected: Mapping[str, Any], actual: Mapping[str, Any]) -> 
     match_key = expected.get("match_key") or {}
     if not isinstance(match_key, Mapping):
         return False
-    for key, expected_value in match_key.items():
+    controlled = (
+        str(match_key.get("assertion_id", "") or "").strip()
+        and str(match_key.get("claim_subject", "") or "").strip()
+    )
+    # In schema v2, controlled assertion/subject identity outranks mutable
+    # display wording. A gold set can still include sheet/value constraints.
+    keys = (
+        [key for key in match_key if key != "issue_type"]
+        if controlled
+        else list(match_key)
+    )
+    for key in keys:
+        expected_value = match_key[key]
         if str(actual.get(key, "") or "") != str(expected_value or ""):
             return False
-    return bool(match_key)
+    return bool(keys)
+
+
+def _has_controlled_match_key(expected: Mapping[str, Any]) -> bool:
+    match_key = expected.get("match_key") or {}
+    return isinstance(match_key, Mapping) and bool(
+        str(match_key.get("assertion_id", "") or "").strip()
+        and str(match_key.get("claim_subject", "") or "").strip()
+    )
+
+
+def _display_match_key(expected: Mapping[str, Any]) -> dict[str, Any]:
+    match_key = expected.get("match_key")
+    return dict(match_key) if isinstance(match_key, Mapping) else {}
 
 
 def _evidence_ids_from_quality(finding: Mapping[str, Any]) -> set[str]:
@@ -193,6 +218,7 @@ def evaluate_quality_cases(
             "failures": [{"code": "invalid_manifest", "case_id": ""}],
         }
 
+    schema_v2 = str(manifest.get("schema_version", "") or "") == "review-quality/2"
     for raw_case in cases:
         if not isinstance(raw_case, Mapping):
             failures.append({"code": "invalid_case", "case_id": ""})
@@ -230,6 +256,17 @@ def evaluate_quality_cases(
         if str(raw_case.get("adjudication_status", "") or "") != "adjudicated":
             failures.append({"code": "missing_adjudication", "case_id": case_id})
 
+        if schema_v2:
+            for expected_finding in expected:
+                if not _has_controlled_match_key(expected_finding):
+                    failures.append(
+                        {
+                            "code": "invalid_controlled_match_key",
+                            "case_id": case_id,
+                            "match_key": _display_match_key(expected_finding),
+                        }
+                    )
+
         used_actual: set[int] = set()
         matched_pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
         for expected_finding in expected:
@@ -244,10 +281,10 @@ def evaluate_quality_cases(
             )
             if match_index is None:
                 failures.append(
-                    {
-                        "code": "missing_finding",
-                        "case_id": case_id,
-                        "match_key": dict(expected_finding.get("match_key") or {}),
+                        {
+                            "code": "missing_finding",
+                            "case_id": case_id,
+                            "match_key": _display_match_key(expected_finding),
                     }
                 )
                 continue
@@ -270,10 +307,10 @@ def evaluate_quality_cases(
             actual_status = str(actual_finding.get("status", "") or "")
             if actual_status != expected_status:
                 failures.append(
-                    {
-                        "code": "status_mismatch",
-                        "case_id": case_id,
-                        "match_key": dict(expected_finding.get("match_key") or {}),
+                        {
+                            "code": "status_mismatch",
+                            "case_id": case_id,
+                            "match_key": _display_match_key(expected_finding),
                         "expected": expected_status,
                         "actual": actual_status,
                     }
@@ -282,10 +319,10 @@ def evaluate_quality_cases(
             actual_severity = str(actual_finding.get("severity", "") or "")
             if actual_severity != expected_severity:
                 failures.append(
-                    {
-                        "code": "severity_mismatch",
-                        "case_id": case_id,
-                        "match_key": dict(expected_finding.get("match_key") or {}),
+                        {
+                            "code": "severity_mismatch",
+                            "case_id": case_id,
+                            "match_key": _display_match_key(expected_finding),
                         "expected": expected_severity,
                         "actual": actual_severity,
                     }
