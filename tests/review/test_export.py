@@ -76,6 +76,42 @@ def test_export_findings_returns_xlsx(client, monkeypatch, tmp_path):
     assert "r123" in summary_values
 
 
+def test_export_route_includes_execution_manifest_metadata(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
+    results_dir = tmp_path / "assets" / "results"
+    results_dir.mkdir(parents=True)
+    (results_dir / "r-manifest_findings.json").write_text(
+        json.dumps(
+            {
+                "review_id": "r-manifest",
+                "stats": {"total_findings": 1, "by_severity": {"P1": 1}},
+                "findings": [{"issue_type": "问题A", "evidence_refs": []}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ReviewArtifactStore().begin(
+        ReviewManifest(
+            review_id="r-manifest",
+            source="test.xlsx",
+            input_set_sha256="input-set-route",
+            execution_sha256="execution-route",
+            engine_version="engine-route",
+        )
+    )
+
+    response = client.get("/findings/r-manifest/export?format=xlsx")
+
+    assert response.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    values = [
+        workbook["输入与运行清单"].cell(row=row, column=3).value
+        for row in range(2, workbook["输入与运行清单"].max_row + 1)
+    ]
+    assert "input-set-route" in values
+    assert "execution-route" in values
+
+
 def test_export_findings_missing_returns_404(client, monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))
     res = client.get("/findings/notexist/export?format=xlsx")
@@ -321,6 +357,8 @@ def test_generate_findings_xlsx_adds_quality_and_provenance_sheets_compatibly():
         "审阅运行摘要",
         "审阅质量摘要",
         "证据溯源明细",
+        "输入与运行清单",
+        "审阅一致性与冲突",
     ]
     legacy_ws = wb["审阅发现汇总"]
     assert legacy_ws.cell(row=2, column=3).value == "C5"
@@ -332,8 +370,12 @@ def test_generate_findings_xlsx_adds_quality_and_provenance_sheets_compatibly():
     assert "partial" in [quality_ws.cell(row=2, column=c).value for c in range(1, 18)]
 
     provenance_ws = wb["证据溯源明细"]
-    assert provenance_ws.max_row == 2
-    provenance_values = [provenance_ws.cell(row=2, column=c).value for c in range(1, 15)]
+    assert provenance_ws.max_row == 3
+    provenance_values = [
+        provenance_ws.cell(row=row, column=column).value
+        for row in range(2, provenance_ws.max_row + 1)
+        for column in range(1, provenance_ws.max_column + 1)
+    ]
     assert "cell:1" in provenance_values
     assert "foreign.txt" not in str(provenance_values)
 
@@ -351,3 +393,180 @@ def test_generate_findings_xlsx_handles_legacy_payload_without_quality_envelope(
         for row in range(2, wb["审阅运行摘要"].max_row + 1)
     ]
     assert any("历史结果" in str(value) for value in summary_values)
+
+
+def test_generate_findings_xlsx_exports_quality_v2_run_identity_and_conflicts():
+    findings = [
+        {
+            "finding_id": "finding:quality-1",
+            "issue_type": "附件内容无法支持结论",
+            "severity": "P1",
+            "sheet": "SA-1",
+            "cell": "C5",
+            "status": "fail",
+            "assertion_id": "attachment.content.support",
+            "claim_type": "attachment_content",
+            "claim_subject": "SA-1|attachment:contract.pdf",
+            "claim_value": "unsupported",
+            "evidence_refs": [
+                {"attachment": "untrusted.pdf", "excerpt": "不得导出的拒绝摘录"}
+            ],
+            "quality": {
+                "schema_version": "review-quality/2",
+                "finding_id": "finding:quality-1",
+                "citation_validation": {
+                    "status": "partial",
+                    "verified_count": 1,
+                    "rejected_count": 1,
+                    "rejection_codes": ["out_of_scope_source"],
+                    "verified_refs": [
+                        {
+                            "evidence_id": "attachment:1",
+                            "source_kind": "attachment",
+                            "attachment": "contract.pdf",
+                            "excerpt": "已接受的附件摘录",
+                            "source_sha256": "source-sha",
+                            "content_hash": "content-sha",
+                        }
+                    ],
+                },
+                "claim_support": {
+                    "status": "partial",
+                    "supporting_evidence_ids": ["attachment:1"],
+                    "missing_requirements": ["attachment_content"],
+                    "reason_codes": ["attachment_required"],
+                },
+                "consistency": {
+                    "status": "conflicted",
+                    "conflict_ids": ["conflict:1"],
+                    "related_finding_ids": ["finding:quality-2"],
+                    "reason_codes": ["exclusive_claim_values"],
+                },
+                "provenance": {
+                    "input_sha256": "input-sha",
+                    "input_set_sha256": "input-set-sha",
+                    "execution_sha256": "execution-sha",
+                    "engine_version": "review-engine/2",
+                    "assertion_catalog": {
+                        "id": "review-quality",
+                        "version": "1.0.0",
+                    },
+                },
+                "remediation": {
+                    "status": "actionable",
+                    "action": "补充原始合同附件",
+                    "required_evidence": ["冻结附件原件"],
+                    "acceptance_criteria": ["结论可定位到附件摘录"],
+                    "missing_fields": [],
+                },
+            },
+        }
+    ]
+    data = generate_findings_xlsx(
+        findings,
+        report_metadata={
+            "review_id": "r-quality-v2",
+            "quality_stats": {"mode": "shadow", "total_findings": 1},
+            "conflicts": [
+                {
+                    "conflict_id": "conflict:1",
+                    "assertion_id": "attachment.content.support",
+                    "claim_subject": "SA-1|attachment:contract.pdf",
+                    "finding_ids": ["finding:quality-1", "finding:quality-2"],
+                    "values": ["present", "absent"],
+                    "status": "unresolved",
+                }
+            ],
+            "manifest": {
+                "inputs": [
+                    {
+                        "role": "workpaper",
+                        "path": "/private/server/workpaper.xlsx",
+                        "filename": "workpaper.xlsx",
+                        "sha256": "workpaper-sha",
+                        "size": 42,
+                        "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    }
+                ],
+                "requested_sheets": ["SA-1"],
+                "engine_version": "review-engine/2",
+                "input_set_sha256": "input-set-sha",
+                "execution_sha256": "execution-sha",
+                "runtime_config": {
+                    "review_model": "review-model-a",
+                    "review_temperature": 0.2,
+                    "quality_mode": "shadow",
+                    "judgement_mode": "off",
+                    "secret": "must-not-export",
+                },
+                "components": [
+                    {
+                        "component_id": "review-quality-remediation",
+                        "version": "1.0.0",
+                        "sha256": "component-sha",
+                    }
+                ],
+            },
+        },
+    )
+
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    legacy_headers = [
+        wb["审阅发现汇总"].cell(row=1, column=column).value
+        for column in range(1, 16)
+    ]
+    assert legacy_headers == EXPECTED_HEADERS
+    assert wb.sheetnames[-2:] == ["输入与运行清单", "审阅一致性与冲突"]
+
+    quality_ws = wb["审阅质量摘要"]
+    quality_columns = {
+        quality_ws.cell(row=1, column=column).value: column
+        for column in range(1, quality_ws.max_column + 1)
+    }
+    assert quality_ws.cell(row=2, column=quality_columns["assertion_id"]).value == (
+        "attachment.content.support"
+    )
+    assert quality_ws.cell(row=2, column=quality_columns["Claim 类型"]).value == (
+        "attachment_content"
+    )
+    assert quality_ws.cell(row=2, column=quality_columns["结论支持状态"]).value == "partial"
+    assert quality_ws.cell(row=2, column=quality_columns["一致性状态"]).value == "conflicted"
+    assert quality_ws.cell(row=2, column=quality_columns["冲突编号"]).value == "conflict:1"
+    assert quality_ws.cell(row=2, column=quality_columns["输入集SHA256"]).value == "input-set-sha"
+    assert quality_ws.cell(row=2, column=quality_columns["执行SHA256"]).value == "execution-sha"
+
+    provenance_ws = wb["证据溯源明细"]
+    provenance_headers = {
+        provenance_ws.cell(row=1, column=column).value: column
+        for column in range(1, provenance_ws.max_column + 1)
+    }
+    provenance_values = [
+        [provenance_ws.cell(row=row, column=column).value for column in range(1, provenance_ws.max_column + 1)]
+        for row in range(2, provenance_ws.max_row + 1)
+    ]
+    assert any(
+        row[provenance_headers["验证状态"] - 1] == "accepted"
+        and row[provenance_headers["支持该声明"] - 1] == "是"
+        and "已接受的附件摘录" in row
+        for row in provenance_values
+    )
+    assert any(
+        row[provenance_headers["验证状态"] - 1] == "rejected"
+        and row[provenance_headers["拒绝码"] - 1] == "out_of_scope_source"
+        for row in provenance_values
+    )
+    assert "不得导出的拒绝摘录" not in str(provenance_values)
+
+    execution_ws = wb["输入与运行清单"]
+    execution_values = [
+        execution_ws.cell(row=row, column=3).value
+        for row in range(2, execution_ws.max_row + 1)
+    ]
+    assert "input-set-sha" in execution_values
+    assert "execution-sha" in execution_values
+    assert "review-model-a" in execution_values
+    assert "/private/server/workpaper.xlsx" not in str(execution_values)
+    assert "must-not-export" not in str(execution_values)
+
+    conflicts_ws = wb["审阅一致性与冲突"]
+    assert conflicts_ws.cell(row=2, column=1).value == "conflict:1"

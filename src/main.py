@@ -482,6 +482,24 @@ async def export_findings(
     if not selected_findings:
         raise HTTPException(status_code=404, detail="findings not found or empty")
 
+    # The report renderer accepts only selected, display-safe manifest fields;
+    # keep the raw artifact in storage and let the exporter apply its own
+    # whitelist before writing the workbook.
+    artifact_manifest = ReviewArtifactStore().load_manifest(review_id)
+    if isinstance(artifact_manifest, dict):
+        selected_metadata["manifest"] = artifact_manifest
+    selected_stats = selected_metadata.get("stats")
+    quality_stats = (
+        selected_stats.get("quality") if isinstance(selected_stats, dict) else None
+    )
+    if isinstance(quality_stats, dict):
+        selected_metadata["quality_stats"] = quality_stats
+        consistency = quality_stats.get("consistency")
+        if isinstance(consistency, dict) and isinstance(
+            consistency.get("conflicts"), list
+        ):
+            selected_metadata["conflicts"] = consistency["conflicts"]
+
     xlsx_bytes = generate_findings_xlsx(
         selected_findings, report_metadata=selected_metadata
     )

@@ -180,6 +180,48 @@ describe("buildWorkbenchViewModel", () => {
     );
   });
 
+  it("preserves optional quality v2 claim and conflict fields for rendering", () => {
+    const model = buildWorkbenchViewModel({
+      status: "completed",
+      archiveUrl: "",
+      contentBlocks: [],
+      messages: [],
+      isLoading: false,
+      elapsedSeconds: 1,
+      error: null,
+      findings: {
+        review_id: "rid-quality-v2",
+        stats: { total_findings: 1, by_severity: { P1: 1 } },
+        findings: [
+          {
+            issue_type: "附件内容支持不足",
+            severity: "P1",
+            assertion_id: "attachment.content.support",
+            claim_type: "attachment_content",
+            claim_subject: "SA-1|attachment:contract.pdf",
+            claim_value: "unsupported",
+            quality: {
+              schema_version: "review-quality/2",
+              claim_support: {
+                status: "partial",
+                supporting_evidence_ids: ["attachment:1"],
+              },
+              consistency: {
+                status: "conflicted",
+                conflict_ids: ["conflict:1"],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const finding = model.analysisSections[0]?.findings?.[0];
+    expect(finding?.claim_type).toBe("attachment_content");
+    expect(finding?.quality?.claim_support?.status).toBe("partial");
+    expect(finding?.quality?.consistency?.conflict_ids).toEqual(["conflict:1"]);
+  });
+
   it("exposes validated evidence-agent OCR analysis for the workbench", () => {
     const model = buildWorkbenchViewModel({
       status: "completed",

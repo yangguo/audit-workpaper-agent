@@ -152,6 +152,53 @@ def test_build_artifact_view_exposes_bounded_v1_shadow_comparison():
     assert payload["comparison"]["items"][0]["legacy_finding_id"] == "legacy-1"
 
 
+def test_build_artifact_view_exposes_only_whitelisted_execution_identity():
+    manifest = _manifest()
+    manifest.update(
+        {
+            "input_set_sha256": "input-set-sha",
+            "execution_sha256": "execution-sha",
+            "runtime_config": {
+                "review_model": "review-model-a",
+                "review_endpoint_sha256": "endpoint-sha",
+                "review_temperature": 0.2,
+                "quality_mode": "shadow",
+                "judgement_mode": "off",
+                "api_key": "must-not-leak",
+            },
+            "components": [
+                {
+                    "component_id": "review-quality-remediation",
+                    "version": "1.0.0",
+                    "sha256": "component-sha",
+                    "path": "/private/server/policy_packs",
+                }
+            ],
+        }
+    )
+
+    payload = build_artifact_view(review_id="rid-identity", manifest=manifest)
+
+    assert payload["input_set_sha256"] == "input-set-sha"
+    assert payload["execution_sha256"] == "execution-sha"
+    assert payload["runtime_config"] == {
+        "review_model": "review-model-a",
+        "review_endpoint_sha256": "endpoint-sha",
+        "review_temperature": 0.2,
+        "quality_mode": "shadow",
+        "judgement_mode": "off",
+    }
+    assert payload["components"] == [
+        {
+            "component_id": "review-quality-remediation",
+            "version": "1.0.0",
+            "sha256": "component-sha",
+        }
+    ]
+    assert "/private/server" not in str(payload)
+    assert "must-not-leak" not in str(payload)
+
+
 @pytest.mark.asyncio
 async def test_review_artifact_route_returns_bounded_payload(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_PATH", str(tmp_path))

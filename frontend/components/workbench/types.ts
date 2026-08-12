@@ -1,5 +1,10 @@
 export type WorkbenchStatus =
-  "idle" | "uploading" | "running" | "completed" | "failed" | "timeout";
+  | "idle"
+  | "uploading"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timeout";
 
 export type EvidenceItem = {
   id: string;
@@ -95,6 +100,18 @@ export type FindingQualityGate = {
   duration_ms?: number | null;
 };
 
+export type ClaimSupportStatus =
+  | "supported"
+  | "partial"
+  | "unsupported"
+  | "not_required"
+  | "error";
+
+export type FindingConsistencyStatus =
+  | "consistent"
+  | "conflicted"
+  | "not_comparable";
+
 export type FindingQuality = {
   schema_version?: string;
   finding_id?: string;
@@ -114,10 +131,31 @@ export type FindingQuality = {
     verified_refs?: EvidenceRef[];
   };
   gates?: Record<string, FindingQualityGate>;
+  disposition?: {
+    original_status?: string;
+    effective_status?: string;
+    original_severity?: string;
+    reason_codes?: string[];
+  };
+  claim_support?: {
+    status?: ClaimSupportStatus;
+    supporting_evidence_ids?: string[];
+    missing_requirements?: string[];
+    reason_codes?: string[];
+  };
+  consistency?: {
+    status?: FindingConsistencyStatus;
+    conflict_ids?: string[];
+    related_finding_ids?: string[];
+    reason_codes?: string[];
+  };
   provenance?: {
     input_sha256?: string;
+    input_set_sha256?: string;
+    execution_sha256?: string;
     engine_version?: string;
     policy_pack?: { id?: string; version?: string } | null;
+    assertion_catalog?: { id?: string; version?: string } | null;
   };
   grouping?: {
     root_cause_id?: string | null;
@@ -203,6 +241,10 @@ export type EvidenceAgentStatsPayload = {
 
 export type Finding = {
   finding_id?: string;
+  assertion_id?: string;
+  claim_type?: string;
+  claim_subject?: string;
+  claim_value?: string;
   issue_type: string;
   severity?: string;
   severity_display?: string;
@@ -251,7 +293,10 @@ export type FindingsPayload = {
 };
 
 export type ArtifactStageStatus =
-  "completed" | "running" | "disabled" | "error";
+  | "completed"
+  | "running"
+  | "disabled"
+  | "error";
 
 export type ArtifactInput = {
   role?: string;
@@ -295,11 +340,35 @@ export type ArtifactFinding = {
   }>;
 };
 
+export type ArtifactRuntimeConfig = {
+  review_model?: string;
+  review_endpoint_sha256?: string;
+  review_temperature?: number;
+  review_json_mode?: boolean;
+  verify_ssl?: boolean;
+  quality_mode?: "off" | "shadow" | "on";
+  deterministic_crosscheck_mode?: "all_findings" | "p0_only" | "off";
+  evidence_agent_mode?: string;
+  policy_mode?: "shadow" | "off";
+  judgement_mode?: "shadow" | "off";
+  prompt_bundle_version?: string;
+};
+
+export type ArtifactComponentRef = {
+  component_id?: string;
+  version?: string;
+  sha256?: string;
+};
+
 export type ReviewArtifactPayload = {
   review_id: string;
   artifact_status: "running" | "completed" | "error";
   artifact_error?: string | null;
   engine_version?: string;
+  input_set_sha256?: string;
+  execution_sha256?: string;
+  runtime_config?: ArtifactRuntimeConfig;
+  components?: ArtifactComponentRef[];
   created_at?: string;
   source_sha256?: string;
   requested_sheets?: string[];

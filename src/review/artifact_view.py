@@ -6,6 +6,27 @@ from typing import Any
 
 _MAX_FINDINGS = 200
 _MAX_STATS = 32
+_MAX_COMPONENTS = 64
+_RUNTIME_CONFIG_FIELDS = (
+    "review_model",
+    "review_endpoint_sha256",
+    "review_temperature",
+    "review_json_mode",
+    "verify_ssl",
+    "quality_mode",
+    "deterministic_crosscheck_mode",
+    "evidence_agent_mode",
+    "evidence_snapshot_max_cells",
+    "challenger_full_text",
+    "mineru_ocr_mode",
+    "mineru_ocr_language",
+    "mineru_model_version",
+    "policy_mode",
+    "judgement_mode",
+    "judgement_max_requests",
+    "prompt_bundle_version",
+)
+_COMPONENT_FIELDS = ("component_id", "version", "sha256")
 
 def _pack_ref(value: Any) -> dict[str, str] | None:
     if not isinstance(value, dict):
@@ -26,6 +47,35 @@ def _input_view(value: Any) -> dict[str, Any]:
         for key in ("role", "filename", "sha256", "size", "media_type")
         if key in value
     }
+
+
+def _runtime_config_view(value: Any) -> dict[str, Any]:
+    """Return only non-secret, execution-relevant runtime fields."""
+
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: value[key]
+        for key in _RUNTIME_CONFIG_FIELDS
+        if key in value and isinstance(value[key], (str, int, float, bool))
+    }
+
+
+def _component_views(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for raw in value[:_MAX_COMPONENTS]:
+        if not isinstance(raw, dict):
+            continue
+        row = {
+            key: str(raw[key] or "")
+            for key in _COMPONENT_FIELDS
+            if str(raw.get(key, "") or "")
+        }
+        if row:
+            rows.append(row)
+    return rows
 
 
 def _evidence_ref_view(value: Any) -> dict[str, Any]:
@@ -289,6 +339,10 @@ def build_artifact_view(
         "artifact_status": artifact_status,
         "artifact_error": manifest.get("artifact_error"),
         "engine_version": manifest.get("engine_version", ""),
+        "input_set_sha256": str(manifest.get("input_set_sha256", "") or ""),
+        "execution_sha256": str(manifest.get("execution_sha256", "") or ""),
+        "runtime_config": _runtime_config_view(manifest.get("runtime_config")),
+        "components": _component_views(manifest.get("components")),
         "created_at": manifest.get("created_at"),
         "source_sha256": evidence.get("source_sha256", "")
         if isinstance(evidence, dict)

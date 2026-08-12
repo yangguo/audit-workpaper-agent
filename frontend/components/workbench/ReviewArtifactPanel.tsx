@@ -117,14 +117,18 @@ function ComparisonSummary({
   comparison: NonNullable<ReviewArtifactPayload["comparison"]>;
 }) {
   if (comparison.status !== "available") return null;
-  const entries = Object.entries(comparison.counts).filter(([, count]) => count > 0);
+  const entries = Object.entries(comparison.counts).filter(
+    ([, count]) => count > 0,
+  );
   return (
     <div
       data-testid="finding-comparison"
       className="mt-4 rounded-xl border border-blue-200 bg-white/80 p-3"
     >
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm font-semibold text-slate-900">V1 / Shadow 逐条对照</p>
+        <p className="text-sm font-semibold text-slate-900">
+          V1 / Shadow 逐条对照
+        </p>
         <span className="rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700">
           候选差异，尚未成为权威结论
         </span>
@@ -144,9 +148,88 @@ function ComparisonSummary({
           ))}
         </div>
       ) : (
-        <p className="mt-2 text-xs text-slate-500">暂无可比较的 V1 / Shadow 发现。</p>
+        <p className="mt-2 text-xs text-slate-500">
+          暂无可比较的 V1 / Shadow 发现。
+        </p>
       )}
     </div>
+  );
+}
+
+function ExecutionIdentity({ artifact }: { artifact: ReviewArtifactPayload }) {
+  const runtime = artifact.runtime_config;
+  const components = artifact.components || [];
+  const runtimeItems = [
+    ["模型", runtime?.review_model],
+    ["温度", runtime?.review_temperature],
+    ["质量模式", runtime?.quality_mode],
+    ["策略模式", runtime?.policy_mode],
+    ["判定模式", runtime?.judgement_mode],
+  ].filter(([, value]) => value !== undefined && value !== "");
+  const hasIdentity = Boolean(
+    artifact.input_set_sha256 ||
+    artifact.execution_sha256 ||
+    artifact.engine_version ||
+    runtimeItems.length > 0 ||
+    components.length > 0,
+  );
+  if (!hasIdentity) return null;
+
+  return (
+    <section
+      data-testid="execution-identity"
+      className="mt-4 rounded-xl border border-slate-200 bg-white/80 p-3"
+    >
+      <h3 className="text-sm font-semibold text-slate-900">本次运行身份</h3>
+      <p className="mt-1 text-xs leading-5 text-slate-500">
+        输入集、运行选择和版本化组件共同标识本次结果；Stage C 仍仅为候选，不改变
+        V1 当前结论。
+      </p>
+      <dl className="mt-2 grid gap-1 text-xs leading-5 text-slate-600 md:grid-cols-2">
+        {artifact.input_set_sha256 ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">
+              输入集 SHA256：
+            </dt>
+            <dd className="inline break-all">{artifact.input_set_sha256}</dd>
+          </div>
+        ) : null}
+        {artifact.execution_sha256 ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">执行 SHA256：</dt>
+            <dd className="inline break-all">{artifact.execution_sha256}</dd>
+          </div>
+        ) : null}
+        {artifact.engine_version ? (
+          <div>
+            <dt className="inline font-medium text-slate-700">引擎版本：</dt>
+            <dd className="inline">{artifact.engine_version}</dd>
+          </div>
+        ) : null}
+        {runtimeItems.map(([label, value]) => (
+          <div key={label}>
+            <dt className="inline font-medium text-slate-700">{label}：</dt>
+            <dd className="inline">{String(value)}</dd>
+          </div>
+        ))}
+      </dl>
+      {components.length > 0 ? (
+        <div className="mt-2">
+          <p className="text-xs font-medium text-slate-700">版本化组件</p>
+          <ul className="mt-1 space-y-1 text-xs text-slate-600">
+            {components.map((component, index) => (
+              <li
+                key={`${component.component_id || "component"}-${component.sha256 || index}`}
+              >
+                {component.component_id || "未命名组件"}
+                {component.version ? `@${component.version}` : ""}
+                {component.sha256 ? ` · ${component.sha256}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -226,6 +309,8 @@ export function ReviewArtifactPanel({
           status={stageC.status}
         />
       </div>
+
+      <ExecutionIdentity artifact={artifact} />
 
       {artifact.comparison ? (
         <ComparisonSummary comparison={artifact.comparison} />

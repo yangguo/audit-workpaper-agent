@@ -258,6 +258,20 @@ describe("WorkbenchShell", () => {
         artifact={{
           review_id: "rid-artifact",
           artifact_status: "completed",
+          input_set_sha256: "input-set-artifact",
+          execution_sha256: "execution-artifact",
+          runtime_config: {
+            review_model: "review-model-a",
+            quality_mode: "shadow",
+            judgement_mode: "off",
+          },
+          components: [
+            {
+              component_id: "review-quality-remediation",
+              version: "1.0.0",
+              sha256: "component-sha",
+            },
+          ],
           comparison: {
             status: "available",
             authority: "v1",
@@ -308,6 +322,15 @@ describe("WorkbenchShell", () => {
     );
     expect(screen.getByTestId("finding-comparison")).toHaveTextContent(
       "状态冲突：1",
+    );
+    expect(screen.getByTestId("execution-identity")).toHaveTextContent(
+      "input-set-artifact",
+    );
+    expect(screen.getByTestId("execution-identity")).toHaveTextContent(
+      "execution-artifact",
+    );
+    expect(screen.getByTestId("execution-identity")).toHaveTextContent(
+      "review-quality-remediation@1.0.0",
     );
     expect(screen.getByText("V1 结果")).toBeInTheDocument();
   });
@@ -417,7 +440,11 @@ describe("WorkbenchShell", () => {
                 sheet: "SA-4c",
                 evidence_refs: [
                   { attachment: "foreign.txt", excerpt: "不得显示的拒绝引用" },
-                  { sheet: "SA-4c", cell_or_range: "D12", excerpt: "已验证引用" },
+                  {
+                    sheet: "SA-4c",
+                    cell_or_range: "D12",
+                    excerpt: "已验证引用",
+                  },
                 ],
                 quality: {
                   schema_version: "review-quality/1",
@@ -495,14 +522,99 @@ describe("WorkbenchShell", () => {
     expect(findingCard).not.toHaveTextContent("foreign.txt");
   });
 
+  it("renders citation, claim support, and consistency as separate quality badges", () => {
+    render(
+      <WorkbenchShell
+        {...baseWorkbenchProps}
+        analysisSections={[
+          {
+            title: "P1 中风险问题（1）",
+            body: "",
+            findings: [
+              {
+                issue_type: "附件内容支持不足",
+                severity: "P1",
+                status: "fail",
+                sheet: "SA-1",
+                cell: "C5",
+                assertion_id: "attachment.content.support",
+                claim_type: "attachment_content",
+                claim_subject: "SA-1|attachment:contract.pdf",
+                claim_value: "unsupported",
+                evidence_refs: [
+                  {
+                    attachment: "untrusted.pdf",
+                    excerpt: "不得显示的拒绝引用",
+                  },
+                ],
+                quality: {
+                  schema_version: "review-quality/2",
+                  finding_id: "finding:quality-v2",
+                  citation_validation: {
+                    status: "verified",
+                    verified_count: 1,
+                    rejected_count: 0,
+                    verified_refs: [
+                      {
+                        evidence_id: "attachment:1",
+                        source_kind: "attachment",
+                        attachment: "contract.pdf",
+                        excerpt: "已接受附件摘录",
+                      },
+                    ],
+                  },
+                  claim_support: {
+                    status: "partial",
+                    supporting_evidence_ids: ["attachment:1"],
+                    missing_requirements: ["attachment_content"],
+                    reason_codes: ["attachment_required"],
+                  },
+                  consistency: {
+                    status: "conflicted",
+                    conflict_ids: ["conflict:quality-v2"],
+                    related_finding_ids: ["finding:other"],
+                    reason_codes: ["exclusive_claim_values"],
+                  },
+                  provenance: {
+                    input_set_sha256: "input-set-v2",
+                    execution_sha256: "execution-v2",
+                    assertion_catalog: {
+                      id: "review-quality",
+                      version: "1.0.0",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    const findingCard = screen.getByTestId("finding-card");
+    expect(screen.getByText("引用可复现")).toBeInTheDocument();
+    expect(screen.getByText("结论支持不足")).toBeInTheDocument();
+    expect(screen.getByText("存在结论冲突")).toBeInTheDocument();
+    expect(screen.getAllByText("attachment_content").length).toBeGreaterThan(0);
+    expect(findingCard).toHaveTextContent("conflict:quality-v2");
+    expect(findingCard).not.toHaveTextContent("untrusted.pdf");
+  });
+
   it("renders export button when reviewId is provided", () => {
-    render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+    render(
+      <WorkbenchShell
+        {...baseWorkbenchProps}
+        reviewId="r123"
+      />,
+    );
     expect(screen.getByText("导出审阅包（含质量与溯源）")).toBeInTheDocument();
   });
 
   it("hides export button when reviewId is absent", () => {
     render(<WorkbenchShell {...baseWorkbenchProps} />);
-    expect(screen.queryByText("导出审阅包（含质量与溯源）")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("导出审阅包（含质量与溯源）"),
+    ).not.toBeInTheDocument();
   });
 
   describe("export click behaviour", () => {
@@ -522,8 +634,10 @@ describe("WorkbenchShell", () => {
       globalThis.fetch = fetchMock as unknown as typeof fetch;
       createObjectURLMock = vi.fn(() => "blob:mock-url");
       revokeObjectURLMock = vi.fn();
-      URL.createObjectURL = createObjectURLMock as unknown as typeof URL.createObjectURL;
-      URL.revokeObjectURL = revokeObjectURLMock as unknown as typeof URL.revokeObjectURL;
+      URL.createObjectURL =
+        createObjectURLMock as unknown as typeof URL.createObjectURL;
+      URL.revokeObjectURL =
+        revokeObjectURLMock as unknown as typeof URL.revokeObjectURL;
     });
 
     afterEach(() => {
@@ -540,9 +654,16 @@ describe("WorkbenchShell", () => {
         blob: () => Promise.resolve(new Blob(["xlsx-bytes"])),
       });
 
-      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+      render(
+        <WorkbenchShell
+          {...baseWorkbenchProps}
+          reviewId="r123"
+        />,
+      );
 
-      const button = screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" });
+      const button = screen.getByRole("button", {
+        name: "导出审阅包（含质量与溯源）",
+      });
       expect(button).not.toBeDisabled();
       await user.click(button);
 
@@ -568,9 +689,16 @@ describe("WorkbenchShell", () => {
           }),
       );
 
-      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
+      render(
+        <WorkbenchShell
+          {...baseWorkbenchProps}
+          reviewId="r123"
+        />,
+      );
 
-      const button = screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" });
+      const button = screen.getByRole("button", {
+        name: "导出审阅包（含质量与溯源）",
+      });
       await user.click(button);
 
       // While the promise is pending the button must reflect the loading state.
@@ -593,8 +721,15 @@ describe("WorkbenchShell", () => {
         blob: () => Promise.resolve(new Blob()),
       });
 
-      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
-      await user.click(screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" }));
+      render(
+        <WorkbenchShell
+          {...baseWorkbenchProps}
+          reviewId="r123"
+        />,
+      );
+      await user.click(
+        screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" }),
+      );
 
       await vi.waitFor(() => {
         expect(toast.error).toHaveBeenCalledTimes(1);
@@ -606,8 +741,15 @@ describe("WorkbenchShell", () => {
       const user = userEvent.setup();
       fetchMock.mockRejectedValue(new Error("network down"));
 
-      render(<WorkbenchShell {...baseWorkbenchProps} reviewId="r123" />);
-      await user.click(screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" }));
+      render(
+        <WorkbenchShell
+          {...baseWorkbenchProps}
+          reviewId="r123"
+        />,
+      );
+      await user.click(
+        screen.getByRole("button", { name: "导出审阅包（含质量与溯源）" }),
+      );
 
       await vi.waitFor(() => {
         expect(toast.error).toHaveBeenCalledTimes(1);
