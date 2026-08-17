@@ -43,6 +43,10 @@ from review.quality_gates import (
 _logger = logging.getLogger("review.pipeline")
 
 _SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
+# OCR counter keys produced by the attachment-index fallback. The pipeline
+# overlays these onto the evidence-Agent's OCR stats so a no-token or
+# timeout scan becomes visible in the run-level stats dict.
+_OCR_FALLBACK_KEYS = ("calls", "success", "errors", "timeouts", "skipped")
 
 def _apply_static_finding_taxonomy(finding: dict) -> dict:
     """Compatibility wrapper for the former V1 taxonomy helper.
@@ -604,6 +608,11 @@ async def run_review(
     out = [classify_finding(finding, catalog) for finding in out]
 
     _emit_progress(on_progress, "done", "", findings_sorted, "审阅完成")
+    # Aggregate OCR counter: prefer the evidence-Agent numbers (which already
+    # cover runtime calls) but overlay the attachment-index fallback counters
+    # so a no-token or timeout scan becomes visible in the run stats.
+    index_ocr = (attachments or {}).get("ocr_stats") or {}
+    merged_ocr = {**dict(agent_stats["ocr"]), **{k: int(index_ocr.get(k, 0) or 0) for k in _OCR_FALLBACK_KEYS}}
     stats = {
         "total_findings": len(out),
         "by_severity": _counts_by(out, "severity"),
@@ -611,6 +620,7 @@ async def run_review(
         "by_risk_type": _counts_by(out, "risk_type"),
         "llm_call_stats": {k: dict(v) for k, v in LLM_CALL_STATS.items()},
         "evidence_agent": agent_stats,
+        "ocr": merged_ocr,
         "warning": warning,
         "quality_gates": _gate_counts(out),
     }

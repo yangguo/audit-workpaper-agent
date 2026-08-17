@@ -68,6 +68,17 @@ _MAX_ATTACHMENT_FILES = 500
 _MAX_EXTRACTED_TEXT = 12000
 _IGNORED_ATTACHMENT_NAMES = {".DS_Store", "Thumbs.db"}
 
+# Per-build OCR fallback counter. Reset on every call to ``build_attachment_index``
+# so successive reviews don't accumulate. Surfaced in the index dict as
+# ``ocr_stats`` so the pipeline can persist it alongside other review stats
+# and operators can see whether scanned PDFs were attempted or skipped.
+_OCR_FALLBACK_STATS = {"calls": 0, "success": 0, "errors": 0, "timeouts": 0, "skipped": 0}
+
+
+def _reset_ocr_fallback_stats() -> None:
+    for key in _OCR_FALLBACK_STATS:
+        _OCR_FALLBACK_STATS[key] = 0
+
 
 def _normalize_rel_path(value: str) -> str:
     raw = str(value or "").strip().replace("\\", "/")
@@ -173,6 +184,59 @@ def _read_pdf_file(path: Path) -> Tuple[str, str]:
         return "", "unavailable"
 
 
+def _ocr_pdf_with_mineru(path: Path) -> Tuple[str, str]:
+    """Run MinerU OCR on a PDF whose text layer came back empty.
+
+    Returns (text, status). On success status is ``ocr``; on every failure
+    mode the status is a distinct code so the attachment index and review
+    stats can tell the operator exactly what happened:
+
+    * ``ocr_skipped`` — MinerU is disabled (``MINERU_OCR_MODE=off``) or the
+      client could not be constructed. No fallback was attempted.
+    * ``ocr_failed`` — the request was sent but the provider returned no
+      text (timeout, error, unsupported file, too large, etc.).
+    * ``binary`` — preserved for callers that pre-date the distinction;
+      only used when no fallback was even attempted (e.g. legacy callers).
+
+    Outcomes are also tallied in :data:`_OCR_FALLBACK_STATS` so the index
+    builder can surface them without re-running the fallback.
+    """
+    try:
+        from review.mineru_client import MinerUClient
+    except Exception:
+        _OCR_FALLBACK_STATS["skipped"] += 1
+        return "", "ocr_skipped"
+    try:
+        client = MinerUClient.from_env()
+    except Exception:
+        _OCR_FALLBACK_STATS["skipped"] += 1
+        return "", "ocr_skipped"
+    if client is None:
+        _OCR_FALLBACK_STATS["skipped"] += 1
+        return "", "ocr_skipped"
+    _OCR_FALLBACK_STATS["calls"] += 1
+    try:
+        result = client.parse_file(path)
+    except Exception:
+        _OCR_FALLBACK_STATS["errors"] += 1
+        return "", "ocr_failed"
+    provider_status = str(getattr(result, "status", "") or "")
+    text = str(getattr(result, "text", "") or "")
+    if text.strip():
+        _OCR_FALLBACK_STATS["success"] += 1
+        return _limit_text(text, _MAX_EXTRACTED_TEXT), "ocr"
+    if provider_status == "timeout":
+        _OCR_FALLBACK_STATS["timeouts"] += 1
+        return "", "ocr_failed"
+    if provider_status in {"error", "unsupported", "too_large", "disabled"}:
+        _OCR_FALLBACK_STATS["errors"] += 1
+        return "", "ocr_failed"
+    # Unknown empty-text response — treat as a soft failure rather than
+    # silently pretending OCR never ran.
+    _OCR_FALLBACK_STATS["errors"] += 1
+    return "", "ocr_failed"
+
+
 def _extract_attachment_text(path: Path) -> Tuple[str, str]:
     suffix = path.suffix.lower()
     try:
@@ -196,7 +260,25 @@ def _extract_attachment_text(path: Path) -> Tuple[str, str]:
         if suffix == ".pptx":
             return _read_pptx_file(path)
         if suffix == ".pdf":
-            return _read_pdf_file(path)
+            text, status = _read_pdf_file(path)
+            if (status == "binary" and not text) or status == "unavailable":
+                # ``binary`` means pypdf parsed the file but found no text
+                # (scanned / image-only PDF); ``unavailable`` means local
+                # parsing threw or no parser is installed. Either way, the
+                # PDF's content is unknown and OCR is worth attempting so
+                # the policy content reaches the LLM context (this is what
+                # surfaces design-effectiveness findings like PE-6's [1]
+                # P0 that the previous build missed because 备份制度 was
+                # text-empty). The OCR helper reports its own outcome
+                # (``ocr``, ``ocr_skipped``, ``ocr_failed``); we keep its
+                # status even on failure so the index and review stats
+                # can tell the operator whether OCR was attempted.
+                ocr_text, ocr_status = _ocr_pdf_with_mineru(path)
+                if ocr_text:
+                    return ocr_text, ocr_status
+                if ocr_status != "binary":
+                    return text, ocr_status
+            return text, status
         if suffix in _IMAGE_EXTENSIONS:
             return "", "binary"
     except Exception:
@@ -456,6 +538,9 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
     by_index: Dict[str, List[AttachmentFile]] = defaultdict(list)
     by_sheet_norm: Dict[str, List[AttachmentFile]] = defaultdict(list)
     status_counts: Dict[str, int] = defaultdict(int)
+    # Reset per-build OCR fallback counters so successive reviews don't
+    # accumulate; the helpers below bump _OCR_FALLBACK_STATS in place.
+    _reset_ocr_fallback_stats()
     # `rel_path` is the stable path exposed to prompts, findings, and the UI.
     # Embedded entries intentionally use `::` there, while their on-disk names
     # use `__` so they remain portable to filesystems that reject colons.
@@ -514,6 +599,7 @@ def build_attachment_index(attachments_dir: str) -> Dict[str, object]:
         "by_index": dict(by_index),
         "by_sheet_norm": dict(by_sheet_norm),
         "status_counts": dict(status_counts),
+        "ocr_stats": dict(_OCR_FALLBACK_STATS),
         "source_rel_path_by_logical_path": source_rel_path_by_logical_path,
     }
 

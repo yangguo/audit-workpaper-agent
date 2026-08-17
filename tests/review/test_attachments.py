@@ -8,6 +8,7 @@ from review.attachments import (
     build_evidence_inventory,
     load_attachments_preview_xlsx,
     _check_attachment_references,
+    build_attachment_index,
 )
 from review.models import AttachmentPreviewItem
 
@@ -180,3 +181,88 @@ def test_build_evidence_inventory_truncates(tmp_path):
     inv = build_evidence_inventory(idx, max_entries=10, max_embedded=5)
     # Should mention truncation
     assert "实际有" in inv or "前 10" in inv or "前 5" in inv
+
+
+def test_index_exposes_ocr_fallback_stats(tmp_path):
+    """`build_attachment_index` must surface OCR fallback counters so the
+    pipeline can tell the operator whether scanned PDFs were skipped (no
+    token / mode off) vs. attempted (and timed out / errored) vs. succeeded.
+    Previously the fallback only wrote ``binary`` on every failure, which was
+    indistinguishable from a PDF that pypdf just couldn't parse."""
+    d = tmp_path / "atts"
+    d.mkdir()
+    (d / "a.txt").write_text("hello", encoding="utf-8")
+    idx = build_attachment_index(str(d))
+    assert "ocr_stats" in idx, "index must expose ocr_stats"
+    stats = idx["ocr_stats"]
+    assert set(stats.keys()) == {"calls", "success", "errors", "timeouts", "skipped"}
+    # All-zero when no scanned PDFs were encountered.
+    assert stats["calls"] == 0
+    assert stats["success"] == 0
+    assert stats["errors"] == 0
+    assert stats["timeouts"] == 0
+    assert stats["skipped"] == 0
+
+
+def test_ocr_pdf_with_mineru_returns_ocr_skipped_when_mineru_disabled(monkeypatch, tmp_path):
+    """The fallback must return ``("","ocr_skipped")`` and bump the
+    ``skipped`` counter when MinerU is disabled (mode off / no token),
+    rather than silently returning the misleading ``binary`` status that
+    pypdf originally produced."""
+    from review import attachments as att
+
+    # Force MinerU client construction to return None (the same path the
+    # real client takes when MINERU_OCR_MODE=off).
+    monkeypatch.setattr(att, "_OCR_FALLBACK_STATS", {"calls": 0, "success": 0, "errors": 0, "timeouts": 0, "skipped": 0})
+    monkeypatch.setattr(att, "MinerUClient", None, raising=False)
+    # Defang the lazy import inside the helper.
+    import sys
+    sys.modules.pop("review.mineru_client", None)
+    # Make the lazy import succeed but yield None.
+    class _Stub:
+        @staticmethod
+        def from_env():
+            return None
+    monkeypatch.setitem(sys.modules, "review.mineru_client", _Stub)
+
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%binary\n")
+
+    text, status = att._ocr_pdf_with_mineru(pdf)
+    assert text == ""
+    assert status == "ocr_skipped"
+    assert att._OCR_FALLBACK_STATS["skipped"] == 1
+    assert att._OCR_FALLBACK_STATS["calls"] == 0
+
+
+def test_ocr_skipped_status_when_mineru_disabled(tmp_path, monkeypatch):
+    """When MinerU is disabled (no token / mode off), a scanned PDF must be
+    labeled ``ocr_skipped`` rather than the misleading ``binary`` so the
+    operator can see that OCR was considered but not attempted."""
+    from review import attachments as att
+
+    # Force pypdf-style "binary" PDF outcome for any path under tmp_path.
+    monkeypatch.setattr(att, "_read_pdf_file", lambda path: ("", "binary"))
+    # Patch the OCR helper to simulate "MinerU disabled" by returning the
+    # exact ``ocr_skipped`` outcome the real helper emits in that case.
+    monkeypatch.setattr(
+        att, "_ocr_pdf_with_mineru", lambda path: ("", "ocr_skipped")
+    )
+
+    d = tmp_path / "atts"
+    d.mkdir()
+    pdf = d / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%binary\n")
+
+    idx = build_attachment_index(str(d))
+    item = next(it for it in idx["items"] if it.filename == "scan.pdf")
+    # Status must reflect the OCR attempt, not the raw pypdf outcome.
+    assert item.extraction_status == "ocr_skipped", (
+        f"expected ocr_skipped status, got {item.extraction_status!r}"
+    )
+    # ``ocr_stats`` keys must always be present and shaped correctly, even
+    # when no fallback actually ran (the test patches the helper so the
+    # in-module counter does not bump, but the index must still expose the
+    # full key set so downstream consumers can rely on the shape).
+    stats = idx["ocr_stats"]
+    assert set(stats.keys()) == {"calls", "success", "errors", "timeouts", "skipped"}
