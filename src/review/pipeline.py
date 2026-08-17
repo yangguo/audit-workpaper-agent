@@ -6,6 +6,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 import openpyxl
@@ -95,11 +96,12 @@ def _model_re_review_gate(
 ) -> dict[str, object]:
     """Record the independent model re-review without title-based inference."""
 
-    if str(finding.get("origin", "") or "").strip() == "llm":
-        return _gate(
-            "not_run",
-            reason="LLM-origin finding has no separate model verifier",
-        )
+    # LLM-origin findings now flow through `_llm_review_findings` so we can
+    # accept the re-review verdict for them as well. Previously we returned
+    # `not_run` here, which meant every finding in a fully-LLM review (which
+    # is the common case for our procedure-pair + checkpoint + evidence-step
+    # pipeline) was gated out — exactly the situation that produced duplicate
+    # and mis-severity findings in the audit report.
     if not isinstance(review_result, dict):
         return _gate(
             "not_run", reason="model re-review produced no result for this finding"
@@ -114,6 +116,28 @@ def _model_re_review_gate(
             else "re-review status differs from the rule result"
         ),
     )
+
+
+_CHALLENGE_SEVERITIES_DEFAULT = ("P0", "P1")
+
+
+def _challenge_severities() -> Tuple[str, ...]:
+    raw = os.getenv("REVIEW_CHALLENGE_SEVERITIES", "P0,P1")
+    out: List[str] = []
+    for tok in re.split(r"[,\s]+", raw):
+        tok = tok.strip().upper()
+        if not tok:
+            continue
+        if tok not in {"P0", "P1", "P2"}:
+            continue
+        if tok not in out:
+            out.append(tok)
+    return tuple(out) or _CHALLENGE_SEVERITIES_DEFAULT
+
+
+def _challenge_severities_repr() -> str:
+    sevs = _challenge_severities()
+    return "/".join(sevs) if sevs else "none"
 
 
 def _emit_progress(on_progress, stage: str, current_sheet: str, findings, msg: str) -> None:
@@ -523,7 +547,7 @@ async def run_review(
             if isinstance(issue, str)
         ]
 
-        if f.severity == "P0":
+        if f.severity in _challenge_severities() or f.needs_review:
             ws = wb[f.sheet] if f.sheet in wb.sheetnames else None
             ctx = _build_minimal_context(f, ws)
             if not ctx:
@@ -550,7 +574,8 @@ async def run_review(
                     )
         else:
             challenge_gates[idx] = _gate(
-                "not_run", reason="adversarial challenger is limited to P0 findings"
+                "not_run",
+                reason=f"adversarial challenger is limited to {_challenge_severities_repr()} findings",
             )
 
     out: List[dict] = []

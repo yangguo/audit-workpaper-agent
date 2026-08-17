@@ -79,12 +79,32 @@ async def test_llm_review_findings_degrades_to_unknown_on_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_review_findings_skips_llm_tagged_findings(monkeypatch):
+async def test_llm_review_findings_skips_pass_findings(monkeypatch):
     monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
     wb = openpyxl.Workbook()
-    finding = _make_finding(issue_type="LLM判定：检查要点存在问题")
+    finding = _make_finding(issue_type="LLM判定：检查要点存在问题", status="pass")
     llm = _FakeLLM('{"results": []}')
 
     results = await _llm_review_findings(wb, [finding], llm, batch_size=6, sleep_seconds=0)
 
     assert results == {}
+
+
+@pytest.mark.asyncio
+async def test_llm_review_findings_includes_llm_tagged_findings(monkeypatch):
+    monkeypatch.setenv("REVIEW_LLM_BACKOFF_SCALE", "0")
+    wb = openpyxl.Workbook()
+    finding = _make_finding(
+        issue_type="LLM判定：检查要点存在问题", status="fail",
+        snippet="a", basis="b", suggestion="c",
+    )
+    llm = _FakeLLM(
+        '{"results": [{"id": 1, "status": "fail", "severity": "P1", '
+        '"conclusion": "LLM re-review confirms", "reasons": ["x"], '
+        '"risk_type": "覆盖性"}]}'
+    )
+
+    results = await _llm_review_findings(wb, [finding], llm, batch_size=6, sleep_seconds=0)
+
+    assert 1 in results
+    assert results[1]["llm_status"] == "fail"

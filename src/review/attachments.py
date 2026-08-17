@@ -40,8 +40,27 @@ ATTACHMENT_PATH_RE = re.compile(
 )
 ATTACHMENT_INDEX_RE = re.compile(r"(?:附件|证据|图片|截图|索引|目录索引)\s*([0-9]{1,3})")
 
-_SHEET_TAG_RE = re.compile(r"\b((?:SA|PM)[-_ ]?\d{1,2}[A-Za-z]?)\b", re.IGNORECASE)
-_SHEET_TAG_NODELIM_RE = re.compile(r"\b((?:SA|PM)\d{1,2}[A-Za-z]?)\b", re.IGNORECASE)
+# Cross-sheet reference: matches `<C22.SA-3-1>`, `（C22.SA-3-1）`, `[C22.SA-3-1]`,
+# `C22.SA-3-1` etc. The captured group is the dotted identifier; the leading
+# `C22.` (workbook prefix) is optional in practice and is stripped. The
+# remainder (`SA-3-1` / `PE-6` / `NS-5.3` …) is normalised to a directory
+# key and matched against the attachment index's `by_sheet_norm` map so we
+# can pull cross-sheet evidence (e.g. PE-6's `<C22.SA-3-1> 备份制度` from the
+# SA-3-1 directory) into the current sheet's LLM context.
+CROSS_SHEET_REF_RE = re.compile(
+    r"[<\[]+\s*(?:C\d{1,3}\s*\.\s*)?((?:SA|PM|PE|NS)\s*[-.]?\s*\d{1,2}(?:[-.\s]\d{1,3})?[A-Za-z]?)\s*[>\]]+",
+    re.IGNORECASE,
+)
+# Bare-prefix form: `C22.PE-6-2`, `C22.PE-6`, `C22.SA-3-1` (no surrounding
+# brackets). This is the common workpaper convention and was missing entirely
+# from the previous single-pattern regex.
+CROSS_SHEET_BARE_RE = re.compile(
+    r"\bC\d{1,3}\s*\.\s*((?:SA|PM|PE|NS)\s*[-.]?\s*\d{1,2}(?:[-.\s]\d{1,3})?[A-Za-z]?)\b",
+    re.IGNORECASE,
+)
+
+_SHEET_TAG_RE = re.compile(r"\b((?:SA|PM|PE|NS)[-_ ]?\d{1,2}(?:[-_ ]\d{1,2})?[A-Za-z]?)\b", re.IGNORECASE)
+_SHEET_TAG_NODELIM_RE = re.compile(r"\b((?:SA|PM|PE|NS)\d{1,2}(?:\d{1,2})?[A-Za-z]?)\b", re.IGNORECASE)
 
 _TEXT_EXTENSIONS = {".txt", ".csv", ".json", ".xml", ".log", ".md", ".html", ".htm"}
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".jp2", ".webp", ".gif", ".bmp"}
@@ -509,6 +528,85 @@ def _extract_attachment_refs(text: str) -> Tuple[List[str], List[str], List[str]
     return filenames, rel_paths, indices
 
 
+def _extract_cross_sheet_refs(text: str) -> List[str]:
+    """Return the sheet identifiers mentioned by `<C22.XX-...>` or `C22.XX-...` refs."""
+    s = (text or "").strip()
+    if not s:
+        return []
+    seen: List[str] = []
+    seen_norm: set = set()
+    def _consume(ident: str) -> None:
+        ident = (ident or "").strip().replace(" ", "")
+        if not ident:
+            return
+        norm = _normalize_sheet_id(ident)
+        if not norm or norm in seen_norm:
+            return
+        seen.append(ident)
+        seen_norm.add(norm)
+    for m in CROSS_SHEET_REF_RE.finditer(s):
+        _consume(str(m.group(1) or ""))
+    for m in CROSS_SHEET_BARE_RE.finditer(s):
+        _consume(str(m.group(1) or ""))
+    return seen
+
+
+def _resolve_cross_sheet_items(
+    attachments: Dict[str, object],
+    sheet_refs: Sequence[str],
+    *,
+    limit: int = 6,
+    workpaper_context: str = "",
+) -> List[AttachmentFile]:
+    """Look up attachment items that live under another sheet's directory.
+
+    Used when the current sheet text references a sibling sheet's evidence
+    (e.g. PE-6 cites `<C22.SA-3-1> 备份制度` but the file lives under
+    ``审计证据/SA-3-1/SOP-65036-0 备份制度.pdf``). Without this, the LLM
+    context for PE-6 sees only PE-6 attachments and misses the cross-sheet
+    policy that design-effectiveness judgements actually depend on.
+
+    If ``workpaper_context`` contains document titles (e.g. ``《备份制度》``),
+    the resolver prefers items whose filename contains that title so the most
+    relevant file bubbles to the top instead of being diluted by unrelated
+    sibling attachments (a SA-3-1 directory typically holds dozens of docs).
+    """
+    if not attachments or not sheet_refs:
+        return []
+    by_sheet_norm = attachments.get("by_sheet_norm") or {}
+    if not isinstance(by_sheet_norm, dict):
+        return []
+    # Extract title keywords (《...》) from the workpaper text. These are the
+    # titles the auditor actually meant when writing `<C22.SA-3-1>`.
+    title_keywords = re.findall(r"《([^》\s]{2,24})》", workpaper_context or "")
+    picked: List[AttachmentFile] = []
+    picked_keys: set = set()
+    for ref in sheet_refs:
+        norm = _normalize_sheet_id(ref)
+        if not norm:
+            continue
+        items = by_sheet_norm.get(norm)
+        if not isinstance(items, list) or not items:
+            continue
+        # Sort by relevance: title keyword hits first, otherwise basename order.
+        def _score(it: AttachmentFile) -> Tuple[int, str]:
+            name = (it.rel_path or it.filename or "").lower()
+            hits = sum(1 for kw in title_keywords if kw and kw.lower() in name)
+            return (-hits, name)
+        ordered = sorted(items, key=_score) if items else items
+        for it in ordered:
+            if not isinstance(it, AttachmentFile):
+                continue
+            key = (it.rel_path or it.filename or "").lower()
+            if not key or key in picked_keys:
+                continue
+            picked_keys.add(key)
+            picked.append(it)
+            if len(picked) >= limit:
+                return picked
+    return picked
+
+
 def _compact_keywords(text: str) -> List[str]:
     s = (text or "").strip()
     if not s:
@@ -855,6 +953,16 @@ def _attachments_context_for_sheet(ws, attachments: Dict[str, object], limit_cha
     text = _build_sheet_text_for_llm(ws, max_cells=260, max_chars=24000)
     filenames, rel_paths, indices = _extract_attachment_refs(text)
     matched, _ = _match_attachment_items(attachments, filenames=filenames, rel_paths=rel_paths, indices=indices)
+    # Cross-sheet evidence (e.g. PE-6 citing `<C22.SA-3-1> 备份制度`). We pull
+    # the first few items from the referenced sibling sheet directory so the
+    # LLM can verify design-effectiveness claims against the actual policy
+    # document, not just the C8 cell narrative that paraphrases it. The
+    # resolver prefers files whose name matches a `《...》` title mentioned in
+    # the same workpaper (so `《备份制度》` bubbles the SOP-65036 PDF to the
+    # top of the SA-3-1 directory).
+    sheet_refs = _extract_cross_sheet_refs(text)
+    for it in _resolve_cross_sheet_items(attachments, sheet_refs, limit=4, workpaper_context=text):
+        matched.append(it)
     by_sheet = attachments.get("by_sheet_norm") or {}
     if isinstance(by_sheet, dict):
         norm = _normalize_sheet_id(getattr(ws, "title", "") or "")

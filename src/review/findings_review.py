@@ -98,7 +98,13 @@ async def _llm_review_findings(
 ) -> Dict[int, Dict[str, str]]:
     selected: List[tuple] = []
     for idx, item in enumerate(findings_sorted, start=1):
-        if str(item.issue_type or "").startswith("LLM判定："):
+        # Previously we skipped LLM-origin findings on the theory that they
+        # were already a model verdict. In practice the producer (procedure
+        # pairs / checkpoint / evidence_steps) often has a narrower context
+        # than the reviewer (which now sees bounded OCR/attachment full text),
+        # so the LLM-origin path *needs* a second look at least as much as the
+        # rule path. Skip only the trivial "needs-review" placeholder.
+        if str(item.status or "").strip().lower() == "pass":
             continue
         selected.append((idx, item))
     results: Dict[int, Dict[str, str]] = {}
@@ -146,7 +152,7 @@ async def _llm_review_findings(
 
     system_prompt = (
         "你是一名严格的IT审计/财务审计质量复核专家。\n"
-        "你将收到一组『规则/启发式』识别的问题点（每条含：问题类型、严重级别、Sheet/单元格定位、原文摘录、判定依据、整改建议、上下文单元格，以及 — 当存在时 — attachment_full_text 数组：每个元素 {attachment, kind: ocr|attachment_text, excerpt} 是该 finding 引用的附件里抓到的实际内容片段：ocr = OCR 抓到的截图文字，attachment_text = xlsx/docx 直接抽出的文字）。\n"
+        "你将收到一组识别的问题点（每条可能来自规则/启发式或前一轮LLM判定；每条含：问题类型、严重级别、Sheet/单元格定位、原文摘录、判定依据、整改建议、上下文单元格，以及 — 当存在时 — attachment_full_text 数组：每个元素 {attachment, kind: ocr|attachment_text, excerpt} 是该 finding 引用的附件里抓到的实际内容片段：ocr = OCR 抓到的截图文字，attachment_text = xlsx/docx 直接抽出的文字）。\n"
         "你的任务：逐条复核其是否成立、风险影响、需要补充的证据/程序、以及更合适的整改建议。\n"
         "硬性要求（每次复核必须遵守）：\n"
         "A. payload 里 **必然存在** attachment_full_text 数组（{attachment, kind: ocr|attachment_text, excerpt}）。**每次复核前必须先读完整 attachment_full_text**——里面已经放了 OCR 抓到的截图文字或 xlsx/docx 直接抽出的文本。如果 attachment_full_text 非空，不要再说『未提供attachment_full_text』。\n"

@@ -475,19 +475,28 @@ async def test_direct_pipeline_does_not_pass_registry_gate_without_context(monke
     assert gates["claim_has_required_source_kind"]["status"] == "not_run"
 
 
-def test_model_re_review_skip_uses_origin_not_legacy_issue_title():
+def test_model_re_review_accepts_llm_origin_with_review_result():
+    """LLM-origin findings now flow through `_llm_review_findings` so they
+    also get a model re-review verdict — gating them as ``not_run`` based on
+    origin alone was the root cause of the unactioned duplicates/severity
+    issues in the audit report."""
     deterministic = _model_re_review_gate(
         {"origin": "sheet_scope", "issue_type": "LLM判定：历史文案", "status": "fail"},
         {"llm_status": "fail"},
     )
-    llm_origin = _model_re_review_gate(
+    llm_origin_agrees = _model_re_review_gate(
         {"origin": "llm", "issue_type": "普通标题", "status": "fail"},
         {"llm_status": "fail"},
     )
+    llm_origin_no_review = _model_re_review_gate(
+        {"origin": "llm", "issue_type": "普通标题", "status": "fail"},
+        None,
+    )
 
     assert deterministic["status"] == "passed"
-    assert llm_origin["status"] == "not_run"
-    assert llm_origin["reason"]
+    assert llm_origin_agrees["status"] == "passed"
+    assert llm_origin_no_review["status"] == "not_run"
+    assert llm_origin_no_review["reason"]
 
 
 @pytest.mark.asyncio

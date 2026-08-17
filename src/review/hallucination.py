@@ -241,9 +241,15 @@ def _build_minimal_context(finding, ws, max_chars: int = 2000) -> str:
 
 
 async def _challenge_finding_with_llm(*, llm, finding, minimal_context: str) -> Optional[str]:
-    """Run a 'challenge' LLM call to verify a P0/needs_review finding.
+    """Run a 'challenge' LLM call to verify a high-severity finding.
 
     Returns "agree" / "disagree" / None on error.
+
+    NOTE: ``max_tokens`` is set generously (512) on purpose — reasoning
+    models often eat the first 64 tokens on CoT. If we cap too tight the
+    response is empty and the challenger errors out, which on a P0 path
+    silently fails the gate. We also parse the verdict leniently so a
+    trailing "agree" / "成立" after a reasoning paragraph is still caught.
     """
     if not llm or not minimal_context:
         return None
@@ -252,7 +258,7 @@ async def _challenge_finding_with_llm(*, llm, finding, minimal_context: str) -> 
         "你的任务：判断该发现是否真实成立，或仅是表面/缺证据/逻辑不严。\n\n"
         f"【finding JSON】\n{finding.basis[:1000]}\n\n"
         f"【相关最小上下文（底稿原文片段）】\n{minimal_context[:1500]}\n\n"
-        "请回答：agree（成立）/disagree（不成立/无依据）。只输出一个词。"
+        "请回答：agree（成立）/disagree（不成立/无依据）。最后一行只写一个词。"
     )
     try:
         answer = await _llm_chat(
@@ -263,12 +269,30 @@ async def _challenge_finding_with_llm(*, llm, finding, minimal_context: str) -> 
             ],
             stage="challenge",
             max_attempts=2,
-            max_tokens=64,
+            max_tokens=512,
         )
-        answer = (answer or "").strip().lower()
-        if "disagree" in answer or "不同意" in answer or "不成立" in answer:
+        text = (answer or "").strip()
+        if not text:
+            return None
+        text_lower = text.lower()
+        # Prefer the verdict on the last non-empty line so we ignore any
+        # reasoning prose. Look for negative signals first to avoid matching
+        # "不成立" against the more common "成立" substring.
+        for line in reversed([ln.strip() for ln in text.splitlines() if ln.strip()]):
+            ln = line.lower()
+            if "disagree" in ln or "不同意" in ln or "不成立" in ln or "无法成立" in ln:
+                return "disagree"
+            if (
+                line == "agree"
+                or ln == "agree"
+                or "同意" in ln
+                or "成立" in ln
+            ):
+                return "agree"
+        # Fall back to scanning the whole response.
+        if "disagree" in text_lower or "不同意" in text or "不成立" in text:
             return "disagree"
-        if "agree" in answer or "同意" in answer or "成立" in answer:
+        if "agree" in text_lower or "同意" in text or "成立" in text:
             return "agree"
         return None
     except Exception:

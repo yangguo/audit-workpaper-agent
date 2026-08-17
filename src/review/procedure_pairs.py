@@ -527,6 +527,7 @@ async def _llm_judge_procedure_pair(
     execution_text: str,
     inventory: Optional[str] = None,
     guidance: str = "",
+    sample_context: str = "",
 ) -> Tuple[bool, Optional[bool], str, str]:
     """Judge whether execution satisfies the standard program.
 
@@ -584,6 +585,11 @@ async def _llm_judge_procedure_pair(
         f"{_clip(execution_text, 900)}\n\n"
         "请判断C列执行程序是否符合A列标准要求。"
     )
+    if sample_context:
+        user_prompt += (
+            "\n\n【底稿同表其他区域（含样本记录/抽样数量等底稿上下文，便于核对抽样方法、样本总量、抽样代表性等）】\n"
+            f"{_clip(sample_context, 2400)}"
+        )
     # Prepend the sheet's attachment inventory so the judgement can tell a
     # genuinely missing evidence file from one that simply is not named in the
     # execution text. Both prompt variants above reuse this same user_prompt.
@@ -689,6 +695,59 @@ async def _llm_check_procedure_pairs(
 
     keywords_like_procedure = ("询问", "访谈", "检查", "获取", "抽取", "观察", "复核", "比对", "重新执行", "分析", "确认", "审查")
 
+    # Per-sheet supplementary context: the 样本记录 table (rows below the
+    # "样本记录（...）" marker), the 抽样数量 row, and the 测试期间&样本总量
+    # row. The A↔C judgement only sees A/C text by default; without this
+    # region it wrongly concludes "no sampling" when the sampling actually
+    # lives in the bottom half of the sheet (the exact false positive the
+    # PE-6 review produced for C21/C22).
+    def _build_sample_context(ws) -> str:
+        try:
+            markers = {
+                "样本记录", "抽样数量", "测试期间", "样本总量",
+                "发生频率", "控制类型",
+            }
+            lines: List[str] = []
+            for coord, text in _extract_sheet_text_cells(ws):
+                stripped = text.strip()
+                if not stripped:
+                    continue
+                if any(m in stripped for m in markers):
+                    lines.append(f"{coord}: {_truncate(stripped, 200)}")
+                if len(lines) >= 24:
+                    break
+            sample_marker_row: Optional[int] = None
+            for r in range(1, (ws.max_row or 0) + 1):
+                a_val = ws.cell(row=r, column=1).value
+                b_val = ws.cell(row=r, column=2).value
+                if a_val and "样本记录" in str(a_val):
+                    sample_marker_row = r
+                    break
+                if b_val and "样本记录" in str(b_val):
+                    sample_marker_row = r
+                    break
+            if sample_marker_row is not None:
+                stop = min((ws.max_row or sample_marker_row) + 1, sample_marker_row + 40)
+                lines.append("")
+                lines.append(f"[样本记录区 行 {sample_marker_row}-{stop}]")
+                for r in range(sample_marker_row, stop + 1):
+                    row_cells = []
+                    for c in range(1, min((ws.max_column or 0) + 1, 10)):
+                        v = ws.cell(row=r, column=c).value
+                        if v is None:
+                            continue
+                        row_cells.append(f"{get_column_letter(c)}{r}={_truncate(str(v).replace(chr(10), ' / '), 120)}")
+                    if row_cells:
+                        lines.append(" | ".join(row_cells))
+                        if len(lines) >= 80:
+                            break
+            joined = "\n".join(lines)
+            if len(joined) > 4800:
+                joined = joined[:4800] + "..."
+            return joined
+        except Exception:
+            return ""
+
     # Build the evidence inventory once for the whole run: it is derived from
     # the pinned attachment index and does not vary per sheet or per row.
     inventory = build_evidence_inventory(attachments)
@@ -728,6 +787,8 @@ async def _llm_check_procedure_pairs(
             "total": 0, "matched": 0, "failed": 0, "api_errors": 0,
             "skipped_a_empty": 0, "skipped_c_empty": 0, "skipped_ref": 0, "skipped_header": 0,
         }
+
+        sample_context = _build_sample_context(ws)
 
         empty_streak = 0
         for row in range(max(1, int(start_row)), (ws.max_row or 0) + 1):
@@ -799,6 +860,7 @@ async def _llm_check_procedure_pairs(
                 success, is_match, reason, raw = await _llm_judge_procedure_pair(
                     llm=llm, standard_text=a_for_judge, execution_text=c_for_judge,
                     inventory=inventory, guidance=guidance,
+                    sample_context=sample_context,
                 )
                 if success and (is_match is False or is_match is None):
                     if sheet_is_design and _looks_password_design_standard(a_for_judge) and _has_policy_evidence(c_for_judge):
